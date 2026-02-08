@@ -1,4 +1,4 @@
-# RSTDP - Reward-modulated Spike-Timing-Dependent Plasticity
+# Icarus
 
 Research project investigating neuromodulated learning in spiking neural networks for reinforcement learning tasks.
 
@@ -6,7 +6,7 @@ Research project investigating neuromodulated learning in spiking neural network
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/RSTDP.git
+git clone https://github.com/plushywushy/Icarus.git
 cd RSTDP
 ```
 
