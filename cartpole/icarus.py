@@ -87,8 +87,8 @@ CRITIC_THRESH = 1.0
 # Critic LR modulation params
 # ---------------------------------------------------------------------------
 CRITIC_BASE_LR = 1e-3
-CRITIC_ACH_MIN_SCALE = 0.1
-CRITIC_ACH_MAX_SCALE = 5.0
+CRITIC_ACH_MIN_SCALE = 1.0 #0.1
+CRITIC_ACH_MAX_SCALE = 1.0 #5.0
 
 # Editable global seed (set to None for non-deterministic runs)
 SEED = 123

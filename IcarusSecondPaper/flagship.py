@@ -7,7 +7,8 @@ Switch CartPole with decoupled uncertainty following Yu & Dayan's conjecture:
 Critic uses a local TD-LTP style update with loss as a multiplicative factor.
 Actor LR decays each step and is boosted by ACh (not set equal to ACh).
 """
-#TODO: Implement serotonin as mood, deconstruct training process with visual
+
+#TODO: Run with low ACh center with switch; run with high ACh center without switch.
 import argparse
 import math
 import numpy as np
@@ -82,7 +83,7 @@ VAR_DECAY = 0
 ACTOR_LR_DECAY = 1e-3
 ACTOR_LR_BOOST = 0.001
 ACTOR_LR_MIN = 1e-6
-ACTOR_LR_MAX = 0.008
+ACTOR_LR_MAX = 0.1
 
 # Editable global seed (set to None for non-deterministic runs)
 SEED = 1234
@@ -304,7 +305,7 @@ def train(args):
         done = False
         total_reward = 0.0
 
-        inverted = (ep > 15000)
+        inverted = (ep > 6000)
 
         # =====================================================================
         # DECOUPLED NEUROMODULATION
@@ -486,13 +487,13 @@ def train(args):
     fig.tight_layout()
     plt.title("Switch CartPole - Decoupled Uncertainty (TD-LTP Critic, Actor LR Decay)")
 
-    out_dir = f"cartpole/runs/{args.seed}_critic_ach_decoupled_tdlp_actor_lr_decay" if args.seed is not None else "cartpole/runs/noseed_critic_ach_decoupled_tdlp_actor_lr_decay"
+    out_dir = f"icarussecondpaper/runs/{args.seed}_flagship" if args.seed is not None else "cartpole/runs/noseed_critic_ach_decoupled_tdlp_actor_lr_decay"
     os.makedirs(out_dir, exist_ok=True)
 
-    png_path = os.path.join(out_dir, f"{args.seed}_critic_ach_decoupled_tdlp_actor_lr_decay.png")
+    png_path = os.path.join(out_dir, f"{args.seed}_flagship.png")
     fig.savefig(png_path, dpi=150, bbox_inches="tight")
 
-    csv_path = os.path.join(out_dir, f"{args.seed}_critic_ach_decoupled_tdlp_actor_lr_decay.csv")
+    csv_path = os.path.join(out_dir, f"{args.seed}_flaship.csv")
     with open(csv_path, "w") as fh:
         fh.write("episode,reward,unexpected_uncertainty,expected_uncertainty,mean_variance,mean_td_error_sq,mean_delta_var,mean_actor_lr,mean_abs_td\n")
         for i, (r, u, e, v, td2, dv, alr, td) in enumerate(zip(reward_history, unexpected_history, expected_history, variance_history, td2_history, delta_var_history, actor_lr_history, td_history)):
@@ -503,7 +504,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=30000)
+    parser.add_argument("--episodes", type=int, default=15000)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
