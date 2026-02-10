@@ -45,8 +45,8 @@ NE_K = 0.2
 NE_CENTER = 15
 
 # ACh logistic mapping params (for expected uncertainty / variance)
-ACH_MAX = 0.004061 
-ACH_K = 4 
+ACH_MAX = 1
+ACH_K = 10 
 ACH_CENTER = 8
 
 # Surprise EMA
@@ -80,13 +80,13 @@ TD_NOVELTY_MARGIN = 0.0
 CRITIC_BASE_LR = 0.001
 
 VAR_DECAY = 0
-ACTOR_LR_DECAY = 1e-3
+ACTOR_LR_DECAY = 0.9  
 ACTOR_LR_BOOST = 0.001
-ACTOR_LR_MIN = 1e-6
+ACTOR_LR_MIN = 1e-4
 ACTOR_LR_MAX = 0.1
 
 # Editable global seed (set to None for non-deterministic runs)
-SEED = 1234
+SEED = 12345
 
 
 def set_global_seed(seed: int | None):
@@ -269,9 +269,6 @@ def train(args):
 
     # EMA of expected uncertainty (drives ACh)
     avg_expected = 0.0
-    exp_fast = 0.0
-    exp_slow = 0.0
-    exp_trace_inited = False
 
     reward_history = []
     unexpected_history = []
@@ -305,7 +302,7 @@ def train(args):
         done = False
         total_reward = 0.0
 
-        inverted = (ep > 6000)
+        inverted = (ep > 5000)
 
         # =====================================================================
         # DECOUPLED NEUROMODULATION
@@ -383,20 +380,12 @@ def train(args):
             actor.update(td_error_val, act_spikes, current_lr=actor_lr)
 
             # =====================================================================
-            # EXPECTED UNCERTAINTY: Use critic's variance estimate directly
+            # EXPECTED UNCERTAINTY: Direct EMA of critic's variance estimate
             # =====================================================================
             current_sigma = torch.sqrt(var_curr.detach()).item()
             current_sigma = max(current_sigma, SURPRISE_EPS)
-            # Expected uncertainty: fast-slow novelty on critic's variance
-            if not exp_trace_inited:
-                exp_fast = current_sigma
-                exp_slow = current_sigma
-                exp_trace_inited = True
-            else:
-                exp_fast = (1.0 - EXP_FAST_ALPHA) * exp_fast + EXP_FAST_ALPHA * current_sigma
-                exp_slow = (1.0 - EXP_SLOW_ALPHA) * exp_slow + EXP_SLOW_ALPHA * current_sigma
-            exp_novelty = max(0.0, exp_fast) #- exp_slow)
-            avg_expected = EXP_SURPRISE_DECAY * avg_expected + exp_novelty #(1.0 - EXP_SURPRISE_DECAY) * exp_novelty
+            
+            avg_expected = (1.0 - EXP_SURPRISE_DECAY) * avg_expected + EXP_SURPRISE_DECAY * current_sigma
 
             # =====================================================================
             # UNEXPECTED UNCERTAINTY: Fast-slow TD novelty
@@ -493,7 +482,7 @@ def train(args):
     png_path = os.path.join(out_dir, f"{args.seed}_flagship.png")
     fig.savefig(png_path, dpi=150, bbox_inches="tight")
 
-    csv_path = os.path.join(out_dir, f"{args.seed}_flaship.csv")
+    csv_path = os.path.join(out_dir, f"{args.seed}_flagship.csv")
     with open(csv_path, "w") as fh:
         fh.write("episode,reward,unexpected_uncertainty,expected_uncertainty,mean_variance,mean_td_error_sq,mean_delta_var,mean_actor_lr,mean_abs_td\n")
         for i, (r, u, e, v, td2, dv, alr, td) in enumerate(zip(reward_history, unexpected_history, expected_history, variance_history, td2_history, delta_var_history, actor_lr_history, td_history)):
@@ -504,7 +493,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=15000)
+    parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)

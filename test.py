@@ -44,7 +44,7 @@ NE_K = 3
 NE_CENTER = 0.4
 
 # ACh logistic mapping params (for expected uncertainty / variance)
-ACH_MAX = 0.004061 
+ACH_MAX = 0.01 
 ACH_K = 3
 ACH_CENTER = 3.7  
 
@@ -80,12 +80,12 @@ CRITIC_ACH_MIN_SCALE = 0.1
 CRITIC_ACH_MAX_SCALE = 0.1
 VAR_DECAY = 0
 SWITCH_EPISODE = 5000
-ACTOR_LR_BASE = 0.0005
-ACTOR_LR_PEAK = 0.01
-ACTOR_LR_ANNEAL_EPISODES = 5000
+ACTOR_LR_BASE = 0.0001
+ACTOR_LR_PEAK = 0.03
+ACTOR_LR_ANNEAL_EPISODES = 100 
 
 # Editable global seed (set to None for non-deterministic runs)
-SEED = 123
+SEED = 1235
 
 
 def set_global_seed(seed: int | None):
@@ -268,9 +268,6 @@ def train(args):
 
     # EMA of expected uncertainty (drives ACh)
     avg_expected = 0.0
-    exp_fast = 0.0
-    exp_slow = 0.0
-    exp_trace_inited = False
 
     reward_history = []
     unexpected_history = []
@@ -384,20 +381,12 @@ def train(args):
             actor.update(td_error_val, act_spikes, current_lr=actor_lr)
 
             # =====================================================================
-            # EXPECTED UNCERTAINTY: Use critic's variance estimate directly
+            # EXPECTED UNCERTAINTY: Direct EMA of critic's variance estimate
             # =====================================================================
             current_sigma = torch.sqrt(var_curr.detach()).item()
             current_sigma = max(current_sigma, SURPRISE_EPS)
-            # Expected uncertainty: fast-slow novelty on critic's variance
-            if not exp_trace_inited:
-                exp_fast = current_sigma
-                exp_slow = current_sigma
-                exp_trace_inited = True
-            else:
-                exp_fast = (1.0 - EXP_FAST_ALPHA) * exp_fast + EXP_FAST_ALPHA * current_sigma
-                exp_slow = (1.0 - EXP_SLOW_ALPHA) * exp_slow + EXP_SLOW_ALPHA * current_sigma
-            exp_novelty = max(0.0, exp_fast) #- exp_slow)
-            avg_expected = SURPRISE_DECAY * avg_expected + (1.0 - SURPRISE_DECAY) * exp_novelty
+            
+            avg_expected = (1.0 - SURPRISE_DECAY) * avg_expected + SURPRISE_DECAY * current_sigma
 
             # =====================================================================
             # UNEXPECTED UNCERTAINTY: Fast-slow TD novelty
@@ -506,7 +495,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=15000)
+    parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
