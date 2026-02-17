@@ -167,36 +167,53 @@ class PlaceCellEncoder(nn.Module):
 # 2. Local TD-LTP Critic (value + variance)
 # --------------------------------------------------------------------------- 
 class LocalCritic:
-    def __init__(self, n_input: int, device: torch.device):
-        self.w_val = torch.zeros(n_input, device=device)
+    def __init__(self, n_input: int, device: torch.device, n_hidden: int = 512):
+        self.device = device
+        self.n_hidden = n_hidden
+        
+        # Fixed random projection for the hidden layer
+        self.w_h = torch.empty(n_input, n_hidden, device=device).normal_(0.0, 0.05)
+        self.b_h = torch.zeros(n_hidden, device=device)
+        
+        # Output layers (trained)
+        self.w_val = torch.zeros(n_hidden, device=device)
         self.b_val = torch.zeros(1, device=device)
-        self.w_var = torch.zeros(n_input, device=device)
+        self.w_var = torch.zeros(n_hidden, device=device)
         self.b_var = torch.zeros(1, device=device)
+        
+        self.mem_h = torch.zeros(n_hidden, device=device)
+        self.decay_mem = math.exp(-DT / TAU_M)
+        self.thresh = 1.0
 
     def reset_state(self):
-        return
+        self.mem_h.zero_()
 
-    def forward(self, input_spikes: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        val = torch.dot(self.w_val, input_spikes) + self.b_val
-        var = F.softplus(torch.dot(self.w_var, input_spikes) + self.b_var) + 1e-4
-        return val, var
+    def forward(self, input_spikes: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Hidden layer LIF dynamics
+        self.mem_h = self.mem_h * self.decay_mem + torch.matmul(input_spikes, self.w_h) + self.b_h
+        hidden_spikes = (self.mem_h >= self.thresh).float()
+        self.mem_h = self.mem_h * (1.0 - hidden_spikes) # Reset
+        
+        val = torch.dot(self.w_val, hidden_spikes) + self.b_val
+        var = F.softplus(torch.dot(self.w_var, hidden_spikes) + self.b_var) + 1e-4
+        return val, var, hidden_spikes
 
-    def update(self, input_spikes: torch.Tensor, td_error: torch.Tensor, var: torch.Tensor, lr: float):
+    def update(self, hidden_spikes: torch.Tensor, td_error: torch.Tensor, var: torch.Tensor, lr: float):
         # TD-LTP: local delta rule with loss as a multiplicative factor.
         val_loss = td_error.abs().detach()
         delta_val = lr * val_loss * td_error.detach()
-        self.w_val += delta_val * input_spikes
+        self.w_val += delta_val * hidden_spikes
         self.b_val += delta_val
 
         if VAR_DECAY > 0.0:
             self.w_var *= (1.0 - VAR_DECAY)
             self.b_var *= (1.0 - VAR_DECAY)
 
-        # Variance tracks squared TD error with a similar loss-scaled update.
+        # Variance tracks squared TD error
         target_var = td_error.detach().pow(2)
         err_var = target_var - var.detach()
         delta_var = lr * err_var    
-        self.w_var += delta_var * input_spikes
+        self.w_var += delta_var * hidden_spikes
         self.b_var += delta_var
 
 
@@ -356,21 +373,33 @@ def train(args):
             done = terminated or truncated
             next_obs_t = torch.tensor(next_obs, dtype=torch.float32, device=device)
 
+            # --- REWARD SHAPING ---
+            # next_obs indices: [x, y, vx, vy, angle, a_vel, touch1, touch2]
+            angle = next_obs[4]
+            a_vel = next_obs[5]
+            
+            # Reward for being upright: penalty increases with angle squared
+            angle_bonus = - (angle ** 2) * 2.0
+            # Reward for low angular velocity: penalty for spinning
+            stability_bonus = - (a_vel ** 2) * 1.0
+            
+            shaped_reward = reward + angle_bonus + stability_bonus
+
             # ------------------------------- 
             # Critic update
             # ------------------------------- 
-            v_curr, var_curr = critic.forward(spikes)
+            v_curr, var_curr, h_spikes = critic.forward(spikes)
             var_sum += float(var_curr.item())
             var_count += 1
 
             if not done:
                 next_spikes = encoder(next_obs_t)
-                v_next, _ = critic.forward(next_spikes)
+                v_next, _, _ = critic.forward(next_spikes)
             else:
                 v_next = torch.tensor([0.0], device=device)
 
-            # Reward Scaling for stability
-            scaled_reward = reward * 0.01
+            # Reward Scaling for stability (slightly higher than before but shaped)
+            scaled_reward = shaped_reward * 0.05
             target = scaled_reward + GAMMA * v_next
             td_error = target - v_curr
             td_error_val = float(td_error.item())
@@ -382,7 +411,7 @@ def train(args):
             td2_sum += td_error_sq
 
             critic_lr = args.critic_base_lr
-            critic.update(spikes, td_error, var_curr, lr=critic_lr)
+            critic.update(h_spikes, td_error, var_curr, lr=critic_lr)
             
             # Clip critic weights for stability
             critic.w_val.clamp_(-100.0, 100.0)
