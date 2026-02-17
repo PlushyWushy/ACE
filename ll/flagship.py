@@ -29,14 +29,16 @@ except ImportError:
 # Constants
 # --------------------------------------------------------------------------- 
 
+# --------------------------------------------------------------------------- 
+
 DT = 0.02
 RHO_PC = 50.0
 TAU_M = 0.02
 ACTOR_THETA = 2.0
-GAMMA = 0.99
+GAMMA = 0.9995 # From tau_gamma = 2000ms: exp(-1/2000) approx 0.9995
 
 # --- NEUROMODULATION PARAMETERS ---
-BASE_LR = 0.000055 
+BASE_LR = 6.25e-5 # From Table 1 (Actor LR)
 BASE_NOISE = 1
 
 # NE logistic mapping params (for unexpected uncertainty / novelty)
@@ -75,14 +77,17 @@ EXP_SLOW_ALPHA = 0.1
 TD_NOVELTY_MARGIN = 0.0
 
 # --------------------------------------------------------------------------- 
-# Actor LR modulation params
+# Hyperparameters Alignement (Chung & Kozma 2020)
 # --------------------------------------------------------------------------- 
-CRITIC_BASE_LR = 0.001
+CRITIC_BASE_LR = 1.25e-4 # From Table 1
+ADAM_BETA1 = 0.995       # From Table 1
+ADAM_BETA2 = 0.99995     # From Table 1
+REWARD_SCALE = 0.012     # From Table 1
 
 VAR_DECAY = 0
 ACTOR_LR_DECAY = 0.1  
 ACTOR_LR_BOOST = 0.1
-ACTOR_LR_MIN = 1e-4
+ACTOR_LR_MIN = 1e-6
 ACTOR_LR_MAX = 0.1
 
 # Editable global seed (set to None for non-deterministic runs)
@@ -175,11 +180,24 @@ class LocalCritic:
         self.w_h = torch.empty(n_input, n_hidden, device=device).normal_(0.0, 0.05)
         self.b_h = torch.zeros(n_hidden, device=device)
         
-        # Output layers (trained)
+        # Output layers (trained manually via Adam)
         self.w_val = torch.zeros(n_hidden, device=device)
         self.b_val = torch.zeros(1, device=device)
         self.w_var = torch.zeros(n_hidden, device=device)
         self.b_var = torch.zeros(1, device=device)
+        
+        # Adam buffers
+        self.m_val = torch.zeros_like(self.w_val)
+        self.v_val = torch.zeros_like(self.w_val)
+        self.m_b_val = torch.zeros_like(self.b_val)
+        self.v_b_val = torch.zeros_like(self.b_val)
+        
+        self.m_var = torch.zeros_like(self.w_var)
+        self.v_var = torch.zeros_like(self.w_var)
+        self.m_b_var = torch.zeros_like(self.b_var)
+        self.v_b_var = torch.zeros_like(self.b_var)
+        
+        self.t = 0 # Step counter for Adam bias correction
         
         self.mem_h = torch.zeros(n_hidden, device=device)
         self.decay_mem = math.exp(-DT / TAU_M)
@@ -199,22 +217,62 @@ class LocalCritic:
         return val, var, hidden_spikes
 
     def update(self, hidden_spikes: torch.Tensor, td_error: torch.Tensor, var: torch.Tensor, lr: float):
-        # TD-LTP: local delta rule with loss as a multiplicative factor.
-        val_loss = td_error.abs().detach()
-        delta_val = lr * val_loss * td_error.detach()
-        self.w_val += delta_val * hidden_spikes
-        self.b_val += delta_val
+        self.t += 1
+        beta1 = ADAM_BETA1
+        beta2 = ADAM_BETA2
+        eps = 1e-8
 
-        if VAR_DECAY > 0.0:
-            self.w_var *= (1.0 - VAR_DECAY)
-            self.b_var *= (1.0 - VAR_DECAY)
+        # --- Value Weights Update ---
+        # gradient = - td_error * hidden_spikes (for MSE minimization)
+        # However, our td_error = target - current, so grad is actually -td_error * hidden_spikes
+        # But we want to step in the direction of the gradient: w = w - lr * grad
+        # So w = w + lr * td_error * hidden_spikes
+        g_w_val = - (td_error.detach() * hidden_spikes)
+        g_b_val = - td_error.detach()
 
-        # Variance tracks squared TD error
+        # m = beta1 * m + (1-beta1) * g
+        self.m_val = beta1 * self.m_val + (1.0 - beta1) * g_w_val
+        self.m_b_val = beta1 * self.m_b_val + (1.0 - beta1) * g_b_val
+        # v = beta2 * v + (1-beta2) * g^2
+        self.v_val = beta2 * self.v_val + (1.0 - beta2) * g_w_val.pow(2)
+        self.v_b_val = beta2 * self.v_b_val + (1.0 - beta2) * g_b_val.pow(2)
+
+        # Bias correction
+        m_corr = self.m_val / (1.0 - beta1**self.t)
+        m_b_corr = self.m_b_val / (1.0 - beta1**self.t)
+        v_corr = self.v_val / (1.0 - beta2**self.t)
+        v_b_corr = self.v_b_val / (1.0 - beta2**self.t)
+
+        self.w_val -= lr * m_corr / (torch.sqrt(v_corr) + eps)
+        self.b_val -= lr * m_b_corr / (torch.sqrt(v_b_corr) + eps)
+
+        # --- Variance Weights Update ---
+        # target_var = td_error^2
+        # variance tracks squared error
         target_var = td_error.detach().pow(2)
         err_var = target_var - var.detach()
-        delta_var = lr * err_var    
-        self.w_var += delta_var * hidden_spikes
-        self.b_var += delta_var
+        
+        g_w_var = - (err_var * hidden_spikes)
+        g_b_var = - err_var
+
+        self.m_var = beta1 * self.m_var + (1.0 - beta1) * g_w_var
+        self.m_b_var = beta1 * self.m_b_var + (1.0 - beta1) * g_b_var
+        self.v_var = beta2 * self.v_var + (1.0 - beta2) * g_w_var.pow(2)
+        self.v_b_var = beta2 * self.v_b_var + (1.0 - beta2) * g_b_var.pow(2)
+
+        m_v_corr = self.m_var / (1.0 - beta1**self.t)
+        m_bv_corr = self.m_b_var / (1.0 - beta1**self.t)
+        v_v_corr = self.v_var / (1.0 - beta2**self.t)
+        v_bv_corr = self.v_b_var / (1.0 - beta2**self.t)
+
+        self.w_var -= lr * m_v_corr / (torch.sqrt(v_v_corr) + eps)
+        self.b_var -= lr * m_bv_corr / (torch.sqrt(v_bv_corr) + eps)
+
+        # Hard clamping for stability
+        self.w_val.clamp_(-100.0, 100.0)
+        self.b_val.clamp_(-100.0, 100.0)
+        self.w_var.clamp_(-100.0, 100.0)
+        self.b_var.clamp_(-100.0, 100.0)
 
 
 # --------------------------------------------------------------------------- 
@@ -225,37 +283,109 @@ class ModulatedActor(nn.Module):
         super().__init__()
         self.device = device
         # 4 actions: Nothing, Left, Main, Right
-        self.w = torch.empty(n_input, 4, device=device).normal_(0.0, 0.1)
+        # Initialize with small weights
+        self.w = torch.empty(n_input, 4, device=device).normal_(0.0, 0.01)
         self.z_eps = torch.zeros(n_input, device=device)
+        # Trace time constant matches their tau_q setup (approx 20-40ms)
         self.decay_eps = math.exp(-DT / TAU_M)
+        
+        # Gating traces for each action (q_ij in paper)
+        self.q_trace = torch.zeros(n_input, 4, device=device)
+        self.decay_q = math.exp(-DT / 0.04) # tau_q = 40ms
+
+        # Firing rate tracking for regularization
+        self.avg_firing_rate = torch.zeros(4, device=device) # per action
+        self.target_rate = 0.05 # 50Hz target (approx)
 
     def reset_state(self):
         self.z_eps.zero_()
+        self.q_trace.zero_()
+        self.avg_firing_rate.zero_()
 
-    def forward(self, input_spikes: torch.Tensor, noise_scale: float) -> Tuple[int, torch.Tensor]:
+    def forward(self, input_spikes: torch.Tensor, noise_scale: float) -> Tuple[int, torch.Tensor, torch.Tensor]:
+        # Update eligibility trace of inputs
         self.z_eps = self.z_eps * self.decay_eps + input_spikes
-        v_det = torch.matmul(self.z_eps, self.w)
-        noise = torch.randn_like(v_det) * noise_scale
-        v_mem = v_det + noise
+        
+        # Action selection via Softmax on membrane potential (approximating their rate-based policy)
+        # We treat w * z_eps as 'logits'
+        logits = torch.matmul(self.z_eps, self.w)
+        
+        # Apply inverse temperature (alpha in paper) - higher means more deterministic
+        # We modulate beta with NE: High NE (surprise) -> Lower beta (more random)
+        base_beta = 15.0 
+        beta = base_beta / (1.0 + noise_scale * 2.0) 
+        
+        probs = F.softmax(logits * beta, dim=0)
+        
+        # Sample action
+        dist = torch.distributions.Categorical(probs)
+        action_idx = dist.sample()
+        action = int(action_idx.item())
+        
+        # Create "action spikes" (one-hot for the chosen action) - A_k in paper
+        action_hot = torch.zeros(4, device=self.device)
+        action_hot[action] = 1.0
+        
+        # Update average firing rates (EMA)
+        self.avg_firing_rate = 0.999 * self.avg_firing_rate + 0.001 * action_hot
+        
+        return action, action_hot, probs
 
-        spike_input = v_mem - ACTOR_THETA
-        exp_arg = torch.clamp(spike_input / 2.0, min=-50.0, max=50.0)
-        rho = 100.0 * torch.exp(exp_arg)
-        probs = 1.0 - torch.exp(-rho * DT)
-        probs = torch.nan_to_num(probs, nan=0.0, posinf=1.0, neginf=0.0)
-        spikes = torch.bernoulli(torch.clamp(probs, 0.0, 1.0))
-
-        # Competitive selection
-        if torch.sum(spikes) == 1:
-            action = int(torch.argmax(spikes).item())
-        else:
-            action = int(torch.argmax(v_mem).item())
-        return action, spikes
-
-    def update(self, td_error: float, output_spikes: torch.Tensor, current_lr: float):
-        eligibility = torch.outer(self.z_eps, output_spikes)
-        self.w += current_lr * td_error * eligibility
-        self.w.clamp_(-10.0, 10.0)
+    def update(self, td_error: float, action_hot: torch.Tensor, probs: torch.Tensor, current_lr: float):
+        # 1. Feedback Modulated Plasticity (Action Gating)
+        # Delta w_ij ~ delta * (A_k - s_k) * z_ij
+        # signal_k = A_k - s_k
+        feedback_signal = action_hot - probs # Shape: [4]
+        
+        # Update gating trace q_ij
+        # q_trace: [n_input, 4]
+        # We broadcast feedback_signal to [1, 4] and z_eps to [n_input, 1]
+        term1 = torch.outer(self.z_eps, feedback_signal)
+        self.q_trace = self.q_trace * self.decay_q + term1
+        
+        # Main update: TD * q_trace
+        delta_w = current_lr * td_error * self.q_trace
+        
+        # 2. Entropy Regularization
+        # Helps prevent converging to "Do Nothing"
+        # grad_H ~ - beta_H * sum (s * (1+log s) * (A-s))
+        # This is complex to implement fully in 1-step, but adding a term that pushes 
+        # probability towards uniform helps.
+        # Simplified Exploration Bonus: Push weights of unchosen actions UP slightly if entropy is low?
+        # Actually, the paper's formula simplifies to adding a bonus proportional to the eligibility trace.
+        entropy_beta = 0.01
+        # Inverse entropy force: (log(s_k) + 1)
+        log_probs = torch.log(probs + 1e-6)
+        entropy_term = -1.0 * (log_probs + 1.0) # Shape [4]
+        # Gating for entropy: (A_k - s_k) part is handled by the q_trace logic implicitly if we add to feedback
+        # But we can just add a direct exploration pressure:
+        # If we just boost the weights of the CHOSEN action inversely to its probability?
+        # Let's stick to their rule: w += eta * ( ... + beta_H * entropy_grad )
+        # Their approx: eta * c_e * g_k * z_ij
+        # It's safer to just use a fixed "Entropy Bonus" added to the reward if entropy is high? 
+        # No, let's implement the weight decay they use which helps distribution.
+        
+        # 3. Weight Decay
+        decay_rate = 1e-5
+        delta_w -= current_lr * decay_rate * self.w
+        
+        # 4. Target Firing Rate Regularization (Homeostasis)
+        # Penalize if average rate is too high
+        # delta ~ - c_t * (rho_avg - rho_target) * z_ij
+        homeo_beta = 0.05
+        rate_error = self.avg_firing_rate - self.target_rate
+        # Create a "homeostatic pressure" vector [4]
+        homeo_pressure = -1.0 * rate_error 
+        
+        # Apply to weights proportional to input activity (z_eps)
+        # We outer product z_eps [N] with homeo_pressure [4]
+        delta_homeo = current_lr * homeo_beta * torch.outer(self.z_eps, homeo_pressure)
+        
+        # Combine
+        self.w += delta_w + delta_homeo
+        
+        # Soft clamp to prevent absolute explosion, but let them grow larger than before
+        self.w.clamp_(-20.0, 20.0)
 
 
 def train(args):
@@ -283,6 +413,7 @@ def train(args):
 
     encoder = PlaceCellEncoder(device)
     actor = ModulatedActor(encoder.n_neurons, device)
+    # Critic uses manual Adam update (stylistic parity with Chung & Kozma)
     critic = LocalCritic(encoder.n_neurons, device)
 
     print(f"Start Switch Lunar Lander (Decoupled Uncertainty: NE~Novelty, ACh~Variance). Episodes: {args.episodes}")
@@ -329,6 +460,7 @@ def train(args):
 
         done = False
         total_reward = 0.0
+        step_count = 0
 
         inverted = (ep > 20000)
 
@@ -339,7 +471,7 @@ def train(args):
         current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER, avg_unexpected, args.base_noise)
         current_ne = min(current_ne, 5.0)
 
-        # ACh uses its own logistic (expected uncertainty -> modulatory signal).
+        # ACh uses its own logistic (expected uncertainty -> modulatory signal). 
         current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
 
         td_sum = 0.0
@@ -359,7 +491,10 @@ def train(args):
 
         while not done:
             spikes = encoder(obs_t)
-            action_code, act_spikes = actor(spikes, noise_scale=current_ne)
+            
+            # Action Sampling: Every 2 environment steps (Chung & Kozma parity)
+            if step_count % 2 == 0:
+                action_code, act_spikes, act_probs = actor(spikes, noise_scale=current_ne)
 
             # Control Inversion: Swap Left (1) and Right (3) thrusters
             if inverted:
@@ -374,19 +509,14 @@ def train(args):
             next_obs_t = torch.tensor(next_obs, dtype=torch.float32, device=device)
 
             # --- REWARD SHAPING ---
-            # next_obs indices: [x, y, vx, vy, angle, a_vel, touch1, touch2]
             angle = next_obs[4]
             a_vel = next_obs[5]
-            
-            # Reward for being upright: penalty increases with angle squared
             angle_bonus = - (angle ** 2) * 2.0
-            # Reward for low angular velocity: penalty for spinning
             stability_bonus = - (a_vel ** 2) * 1.0
-            
             shaped_reward = reward + angle_bonus + stability_bonus
 
             # ------------------------------- 
-            # Critic update
+            # Critic update (Manual Adam)
             # ------------------------------- 
             v_curr, var_curr, h_spikes = critic.forward(spikes)
             var_sum += float(var_curr.item())
@@ -398,28 +528,24 @@ def train(args):
             else:
                 v_next = torch.tensor([0.0], device=device)
 
-            # Reward Scaling for stability (slightly higher than before but shaped)
-            scaled_reward = shaped_reward * 0.05
-            target = scaled_reward + GAMMA * v_next
-            td_error = target - v_curr
+            # Reward Scaling (Parity with Table 1: 0.012)
+            scaled_reward = shaped_reward * REWARD_SCALE
+            target = scaled_reward + GAMMA * v_next.detach()
+            
+            td_error = target - v_curr.detach()
             td_error_val = float(td_error.item())
+            
+            # Manual Adam update call
+            critic.update(h_spikes, td_error, var_curr, lr=args.critic_base_lr)
+
             td_sum += abs(td_error_val)
             td_count += 1
             td_error_sq = td_error_val ** 2
             var_val = float(var_curr.item())
             err_var_val = abs(td_error_val) - var_val
             td2_sum += td_error_sq
-
-            critic_lr = args.critic_base_lr
-            critic.update(h_spikes, td_error, var_curr, lr=critic_lr)
             
-            # Clip critic weights for stability
-            critic.w_val.clamp_(-100.0, 100.0)
-            critic.b_val.clamp_(-100.0, 100.0)
-            critic.w_var.clamp_(-100.0, 100.0)
-            critic.b_var.clamp_(-100.0, 100.0)
-
-            delta_var_val = critic_lr * abs(err_var_val) * err_var_val
+            delta_var_val = args.critic_base_lr * abs(err_var_val) * err_var_val # Approx
             delta_var_sum += delta_var_val
 
             actor_lr_state *= (1.0 - args.actor_lr_decay)
@@ -430,9 +556,10 @@ def train(args):
             actor_lr_count += 1
 
             # ------------------------------- 
-            # Actor update
+            # Actor update (Modulated SGD)
             # ------------------------------- 
-            actor.update(td_error_val, act_spikes, current_lr=actor_lr)
+            # We pass prob distribution now
+            actor.update(td_error_val, act_spikes, act_probs, current_lr=actor_lr)
 
             # =====================================================================
             # EXPECTED UNCERTAINTY: Direct EMA of critic's variance estimate

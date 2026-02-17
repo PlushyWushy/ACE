@@ -25,9 +25,17 @@ def read_csv(path: Path) -> tuple[list[str], list[list[float]]]:
         raise ValueError("CSV file is empty.")
 
     cols: list[list[float]] = [[] for _ in headers]
-    for row in rows:
-        for i, val in enumerate(row):
-            cols[i].append(float(val))
+    for row_idx, row in enumerate(rows):
+        if len(row) != len(headers):
+            # robust skip of partial lines
+            continue
+        try:
+            vals = [float(v) for v in row]
+        except ValueError:
+            continue
+            
+        for i, val in enumerate(vals):
+            cols[i].append(val)
     return headers, cols
 
 
