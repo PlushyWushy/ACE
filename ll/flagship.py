@@ -62,6 +62,11 @@ TD_FAST_ALPHA = 0.097663
 TD_SLOW_ALPHA = 0.003642    
 TD_NOVELTY_MARGIN = 0.0
 
+# --- TRACE PARAMETERS (Triple-Trace) ---
+TAU_PLUS = 0.02 # Pre-synaptic trace TC
+TAU_E = 0.02    # Eligibility trace TC
+SNN_STEPS_PER_ENV_STEP = 20
+
 # --------------------------------------------------------------------------- 
 # Hyperparameters
 # --------------------------------------------------------------------------- 
@@ -140,8 +145,18 @@ class LocalCritic:
         self.decay_mem = math.exp(-DT / TAU_M)
         self.thresh = 1.0
 
+        # Triple-Trace buffers
+        self.h_plus = torch.zeros(n_hidden, device=device)
+        self.v_elig_trace = torch.zeros(n_hidden, device=device)
+        self.var_elig_trace = torch.zeros(n_hidden, device=device)
+        self.decay_plus = math.exp(-DT / TAU_PLUS)
+        self.decay_elig = math.exp(-DT / TAU_E)
+
     def reset_state(self):
         self.mem_h.zero_()
+        self.h_plus.zero_()
+        self.v_elig_trace.zero_()
+        self.var_elig_trace.zero_()
 
     def forward(self, input_spikes: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self.mem_h = self.mem_h * self.decay_mem + torch.matmul(input_spikes, self.w_h) + self.b_h
@@ -151,16 +166,20 @@ class LocalCritic:
         var = F.softplus(torch.dot(self.w_var, spikes) + self.b_var) + 1e-4
         return val, var, spikes
 
-    def update(self, hidden_spikes: torch.Tensor, td_error: torch.Tensor, var: torch.Tensor, lr: float):
+    def update_traces(self, hidden_spikes: torch.Tensor):
+        self.h_plus = self.h_plus * self.decay_plus + hidden_spikes
+        self.v_elig_trace = self.v_elig_trace * self.decay_elig + self.h_plus / (TAU_E / DT)
+        self.var_elig_trace = self.var_elig_trace * self.decay_elig + self.h_plus / (TAU_E / DT)
+
+    def apply_update(self, td_error: torch.Tensor, var_error: torch.Tensor, lr: float):
         delta_val = lr * td_error.abs().detach() * td_error.detach()
-        self.w_val += delta_val * hidden_spikes
+        self.w_val += delta_val * self.v_elig_trace
         self.b_val += delta_val
-        if VAR_DECAY > 0:
-            self.w_var *= (1.0 - VAR_DECAY)
-            self.b_var *= (1.0 - VAR_DECAY)
-        delta_var = lr * (td_error.detach().pow(2) - var.detach())
-        self.w_var += delta_var * hidden_spikes
+        
+        delta_var = lr * var_error.detach()
+        self.w_var += delta_var * self.var_elig_trace
         self.b_var += delta_var
+        
         for p in [self.w_val, self.b_val, self.w_var, self.b_var]: p.clamp_(-100.0, 100.0)
 
 # --------------------------------------------------------------------------- 
@@ -171,23 +190,35 @@ class ModulatedActor(nn.Module):
         super().__init__()
         self.device = device
         self.w = torch.empty(n_input, 4, device=device).normal_(0.0, 0.1)
+        self.p_plus = torch.zeros(n_input, device=device)
+        self.elig_trace = torch.zeros(n_input, 4, device=device)
+        self.decay_plus = math.exp(-DT / TAU_PLUS)
+        self.decay_elig = math.exp(-DT / TAU_E)
+        self.decay_mem = math.exp(-DT / TAU_M)
         self.z_eps = torch.zeros(n_input, device=device)
-        self.decay_eps = math.exp(-DT / TAU_M)
 
     def reset_state(self):
+        self.p_plus.zero_()
+        self.elig_trace.zero_()
         self.z_eps.zero_()
 
-    def forward(self, input_spikes: torch.Tensor, noise_scale: float) -> Tuple[int, torch.Tensor]:
-        self.z_eps = self.z_eps * self.decay_eps + input_spikes
+    def forward(self, input_spikes: torch.Tensor, noise_scale: float) -> Tuple[int, torch.Tensor, torch.Tensor]:
+        self.z_eps = self.z_eps * self.decay_mem + input_spikes
         v_mem = torch.matmul(self.z_eps, self.w) + torch.randn(4, device=self.device) * noise_scale
         rho = 100.0 * torch.exp(torch.clamp((v_mem - ACTOR_THETA)/2.0, -50.0, 50.0))
+        probs = F.softmax(v_mem / 2.0, dim=-1)
         spikes = torch.bernoulli(torch.clamp(1.0 - torch.exp(-rho * DT), 0.0, 1.0))
         if torch.sum(spikes) == 1: action = int(torch.argmax(spikes).item())
         else: action = int(torch.argmax(v_mem).item())
-        return action, spikes
+        return action, spikes, probs
 
-    def update(self, td_error: float, output_spikes: torch.Tensor, current_lr: float):
-        self.w += current_lr * td_error * torch.outer(self.z_eps, output_spikes)
+    def update_traces(self, input_spikes: torch.Tensor, output_spikes: torch.Tensor, probs: torch.Tensor):
+        self.p_plus = self.p_plus * self.decay_plus + input_spikes
+        gated_elig = torch.outer(self.p_plus, (output_spikes - probs))
+        self.elig_trace = self.elig_trace * self.decay_elig + gated_elig / (TAU_E / DT)
+
+    def apply_update(self, reward: float, current_lr: float):
+        self.w += current_lr * reward * self.elig_trace
         self.w.clamp_(-20.0, 20.0)
 
 def train(args):
@@ -215,24 +246,32 @@ def train(args):
         current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
 
         while not done:
-            spikes = encoder(obs_t)
-            action_code, act_spikes = actor(spikes, noise_scale=current_ne)
-            next_obs, reward, terminated, truncated, _ = env.step(action_code)
+            # Sub-stepping loop for Triple-Trace dynamics
+            for t_snn in range(SNN_STEPS_PER_ENV_STEP):
+                spikes = encoder(obs_t)
+                action_code, act_spikes, act_probs = actor(spikes, noise_scale=current_ne)
+                v_curr, var_curr, h_spikes = critic.forward(spikes)
+                
+                critic.update_traces(h_spikes)
+                actor.update_traces(spikes, act_spikes, act_probs)
+                
+                final_action_code = action_code # Last action in sequence
+
+            next_obs, reward, terminated, truncated, _ = env.step(final_action_code)
             done = terminated or truncated
             next_obs_t = torch.tensor(next_obs, dtype=torch.float32, device=device)
 
-            # Reward Shaping
             shaped_reward = reward - (next_obs[4]**2)*2.0 - (next_obs[5]**2)*1.0
-            v_curr, var_curr, h_spikes = critic.forward(spikes)
             if not done: v_next, _, _ = critic.forward(encoder(next_obs_t))
             else: v_next = torch.tensor([0.0], device=device)
 
             td_error = (shaped_reward * args.reward_scale) + GAMMA * v_next.detach() - v_curr.detach()
             td_error_val = float(td_error.item())
-            critic.update(h_spikes, td_error, var_curr, lr=args.critic_base_lr)
+            var_error = td_error.detach().pow(2) - var_curr.detach()
 
+            critic.apply_update(td_error, var_error, lr=args.critic_base_lr)
             actor_lr_state = min(max(actor_lr_state * (1.0 - args.actor_lr_decay) + args.actor_lr_boost * current_ach, args.actor_lr_min), args.actor_lr_max)
-            actor.update(td_error_val, act_spikes, current_lr=actor_lr_state)
+            actor.apply_update(td_error_val, current_lr=actor_lr_state)
 
             current_sigma = min(max(torch.sqrt(var_curr.detach()).item(), SURPRISE_EPS), 10.0)
             avg_expected = (1.0 - EXP_SURPRISE_DECAY) * avg_expected + EXP_SURPRISE_DECAY * current_sigma
