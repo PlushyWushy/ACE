@@ -217,7 +217,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
     max_critic_scale = 0.0
 
     for ep in range(1, episodes + 1):
-        if ep <= 2000:
+        if ep <= 5000:
             prob = [1.0, 0.0]
             optimal = 0
         else:
@@ -301,7 +301,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
 
     plt.figure(figsize=(10, 6))
     plt.plot(plot_episodes, reward_rates, linewidth=2, color="tab:blue", label="Reward Rate")
-    plt.axvline(x=2000, color="tab:red", linestyle="--", label="Switch")
+    plt.axvline(x=5000, color="tab:red", linestyle="--", label="Switch")
     plt.xlabel("Episode")
     plt.ylabel("Reward Rate (%)")
     plt.ylim(0, 105)
@@ -331,7 +331,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=4000)
+    parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=None, help="Random seed (optional)")
     args = parser.parse_args()
     train(args.episodes, seed=args.seed)

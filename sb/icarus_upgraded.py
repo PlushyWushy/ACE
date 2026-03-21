@@ -2,8 +2,8 @@
 """
 Upgraded switching bandit script incorporating cartpole_successful's decoupling:
 - NE (Noise Injection) driven strictly by Unexpected Uncertainty (Fast-Slow TD Novelty)
-- ACh (Actor LR Boost) driven strictly by Expected Uncertainty (Critic Variance)
-- Actor LR uses a Stateful Accumulator (decay + boost)
+- ACh (Actor LR) driven strictly by Expected Uncertainty (Critic Variance)
+- ACh used directly as actor LR (logistic drive with BASE_LR as base)
 """
 
 import math
@@ -23,8 +23,8 @@ DT = 0.02
 TAU_M = 0.02
 ACTOR_THETA = 2.0
 
-BASE_LR = 1e-3
-BASE_NOISE = 0.5
+BASE_LR = 1e-2
+BASE_NOISE = 0
 
 # Surprises
 EXP_SURPRISE_DECAY = 1
@@ -33,7 +33,7 @@ UNEXP_SURPRISE_DECAY = 0.8  # acts as leaky decay multiplier
 # Logistic neuromodulator params
 ACH_MAX = 1.0
 ACH_K = 5
-ACH_CENTER = 0.07
+ACH_CENTER = 1.5
 
 NE_MAX = 2
 NE_K = 1.0
@@ -48,11 +48,7 @@ TD_FAST_ALPHA = 0.097663
 TD_SLOW_ALPHA = 0.1  # Optimized from 0.003642 for discrete bandit shock responses
 TD_NOVELTY_MARGIN = 0.0
 
-# Actor LR stateful constants
-ACTOR_LR_DECAY = 0.9
-ACTOR_LR_BOOST = 0.01 # scale of boost 
-ACTOR_LR_MIN = BASE_LR
-ACTOR_LR_MAX = 0.1
+
 
 CRITIC_LR = 1e-2
 SEED = 5
@@ -155,9 +151,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
         'SURPRISE_VARIANCE_WEIGHT': globals()['SURPRISE_VARIANCE_WEIGHT'], 'SURPRISE_EPS': globals()['SURPRISE_EPS'],
         'TD_SIGNAL_CLIP': globals()['TD_SIGNAL_CLIP'], 'TD_FAST_ALPHA': globals()['TD_FAST_ALPHA'], 
         'TD_SLOW_ALPHA': globals()['TD_SLOW_ALPHA'],
-        'TD_NOVELTY_MARGIN': globals()['TD_NOVELTY_MARGIN'], 'ACTOR_LR_DECAY': globals()['ACTOR_LR_DECAY'],
-        'ACTOR_LR_BOOST': globals()['ACTOR_LR_BOOST'], 'ACTOR_LR_MIN': globals()['ACTOR_LR_MIN'], 
-        'ACTOR_LR_MAX': globals()['ACTOR_LR_MAX'],
+        'TD_NOVELTY_MARGIN': globals()['TD_NOVELTY_MARGIN'],
         'CRITIC_LR': globals()['CRITIC_LR'], 'CRITIC_ACH_MIN_SCALE': globals()['CRITIC_ACH_MIN_SCALE'], 
         'CRITIC_ACH_MAX_SCALE': globals()['CRITIC_ACH_MAX_SCALE']
     }
@@ -179,10 +173,6 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
     TD_FAST_ALPHA = kwargs.get('TD_FAST_ALPHA', defaults['TD_FAST_ALPHA'])
     TD_SLOW_ALPHA = kwargs.get('TD_SLOW_ALPHA', defaults['TD_SLOW_ALPHA'])
     TD_NOVELTY_MARGIN = kwargs.get('TD_NOVELTY_MARGIN', defaults['TD_NOVELTY_MARGIN'])
-    ACTOR_LR_DECAY = kwargs.get('ACTOR_LR_DECAY', defaults['ACTOR_LR_DECAY'])
-    ACTOR_LR_BOOST = kwargs.get('ACTOR_LR_BOOST', defaults['ACTOR_LR_BOOST'])
-    ACTOR_LR_MIN = kwargs.get('ACTOR_LR_MIN', defaults['ACTOR_LR_MIN'])
-    ACTOR_LR_MAX = kwargs.get('ACTOR_LR_MAX', defaults['ACTOR_LR_MAX'])
     CRITIC_LR = kwargs.get('CRITIC_LR', defaults['CRITIC_LR'])
     CRITIC_ACH_MIN_SCALE = kwargs.get('CRITIC_ACH_MIN_SCALE', defaults['CRITIC_ACH_MIN_SCALE'])
     CRITIC_ACH_MAX_SCALE = kwargs.get('CRITIC_ACH_MAX_SCALE', defaults['CRITIC_ACH_MAX_SCALE'])
@@ -193,9 +183,6 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
 
     actor = SNNActor(device)
     critic = LocalCritic(1, device)
-
-    # Actor LR Accumulator
-    actor_lr_state = float(BASE_LR)
 
     # Surprise Tracking
     td_fast = 0.0
@@ -228,13 +215,8 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
         current_ne = logistic_drive(NE_MAX, NE_K, NE_CENTER, avg_unexpected, BASE_NOISE)
         current_ne = min(current_ne, 5.0)
         
-        current_ach = logistic_drive(ACH_MAX, ACH_K, ACH_CENTER, avg_expected, 0.0)
-        current_ach = min(max(current_ach, 0.0), ACH_MAX)
-        
-        # Stateful Actor LR
-        actor_lr_state *= (1.0 - ACTOR_LR_DECAY)
-        actor_lr_state += ACTOR_LR_BOOST * current_ach
-        actor_lr_state = min(max(actor_lr_state, ACTOR_LR_MIN), ACTOR_LR_MAX)
+        current_ach = logistic_drive(ACH_MAX, ACH_K, ACH_CENTER, avg_expected, BASE_LR)
+        current_ach = min(max(current_ach, BASE_LR), ACH_MAX + BASE_LR)
 
         actor.reset_state()
         action, spikes = actor(input_spikes, noise_scale=current_ne)
@@ -258,7 +240,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
         # Local TD-LTP Update
         critic.update(input_spikes, td_error, var_curr, lr=CRITIC_LR * critic_scale)
 
-        actor.update(td_error_val, spikes, lr=actor_lr_state)
+        actor.update(td_error_val, spikes, lr=current_ach)
 
         # EXPECTED UNCERTAINTY (Variance bounds)
         current_sigma = torch.sqrt(var_curr.detach()).item()
@@ -289,7 +271,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
         if ep % 50 == 0 and not quiet:
             accuracy = np.mean(reward_history[-200:]) * 100 if len(reward_history) >= 200 else np.mean(reward_history) * 100
             print(
-                f"Ep {ep:4d} | Opt%: {accuracy:5.1f} | NE: {current_ne:.2f} | ACh: {current_ach:.4f} | LR: {actor_lr_state:.4f} | CriticScale: {critic_scale:.3f} | "
+                f"Ep {ep:4d} | Opt%: {accuracy:5.1f} | NE: {current_ne:.2f} | ACh/LR: {current_ach:.4f} | CriticScale: {critic_scale:.3f} | "
                 f"Unexpected: {avg_unexpected:.3f} | Expected: {avg_expected:.3f} | Var: {var_curr.item():.4f}"
             )
 
