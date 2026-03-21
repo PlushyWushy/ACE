@@ -1,63 +1,17 @@
 # Icarus
 
 Research project investigating neuromodulated learning in spiking neural networks for reinforcement learning tasks.
+## Updates:
+There have been multiple upgrades made recently, mainly to make the tests more biologically plausible. For both switch-bandit and switch-cartpole, the ACh and NE have been decoupled from the original surprise signal and now rely on variance and TD-error as expected and unexpected surprise signals, respectively. Furthermore, the critic is now trained using TD-stdp for both tasks. The new scripts to run are cartpole_successful/flagship.py and sb/icarus_upgraded.py.
 
-## Quick Start
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/plushywushy/Icarus.git
-cd RSTDP
-```
-
-### 2. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Run Experiments
-
-**Classic CartPole (SNN):**
-```bash
-python3 cartpole/classic.py --episodes 4000
-```
-
-**MLP CartPole:**
-```bash
-python3 cartpole/mlp_classic.py --episodes 4000
-```
-
-## Project Structure
-
-```
-RSTDP/
-├── cartpole/           # CartPole experiments
-│   ├── classic.py      # SNN with R-STDP
-│   ├── mlp_classic.py  # MLP baseline
-│   └── ...             # Other variants
-└── README.md
-```
 
 ## Experiments
 
 ### CartPole Switch Task
-- Episodes 0-500: Normal controls
-- Episodes 500+: Inverted controls (tests adaptability)
+### Switch Bandit Task
+### Switch Lunar Landing Task (still in progress)
 
-## Workflow Across Computers
 
-```bash
-# On Computer A
-git pull                    # Get latest changes
-# ... make changes ...
-git add .
-git commit -m "message"
-git push
-
-# On Computer B
-git pull                    # Sync changes
-# ... continue work ...
-```
 
 ## Results
 
