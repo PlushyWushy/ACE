@@ -11,7 +11,7 @@ NEW (bio-ish): Fast–slow TD novelty for surprise (habituation / baseline subtr
 - Surprise is the rectified difference: max(0, fast - slow - margin).
 - avg_surprise is an EMA of that surprise, which then drives NE/ACh logistic mappings.
 """
-
+#TODO: Implement stronger smoothing of lr
 import argparse
 import math
 import numpy as np

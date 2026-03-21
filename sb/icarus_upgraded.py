@@ -23,19 +23,19 @@ DT = 0.02
 TAU_M = 0.02
 ACTOR_THETA = 2.0
 
-BASE_LR = 1e-2
-BASE_NOISE = 1
+BASE_LR = 1e-3
+BASE_NOISE = 0.5
 
 # Surprises
-EXP_SURPRISE_DECAY = 0.01
+EXP_SURPRISE_DECAY = 1
 UNEXP_SURPRISE_DECAY = 0.8  # acts as leaky decay multiplier
 
 # Logistic neuromodulator params
 ACH_MAX = 1.0
-ACH_K = 3.0
-ACH_CENTER = 0.9
+ACH_K = 5
+ACH_CENTER = 0.07
 
-NE_MAX = 1
+NE_MAX = 2
 NE_K = 1.0
 NE_CENTER = ACH_CENTER
 
@@ -49,8 +49,8 @@ TD_SLOW_ALPHA = 0.1  # Optimized from 0.003642 for discrete bandit shock respons
 TD_NOVELTY_MARGIN = 0.0
 
 # Actor LR stateful constants
-ACTOR_LR_DECAY = 0.1
-ACTOR_LR_BOOST = 0  # scale of boost 
+ACTOR_LR_DECAY = 0.9
+ACTOR_LR_BOOST = 0.01 # scale of boost 
 ACTOR_LR_MIN = BASE_LR
 ACTOR_LR_MAX = 0.1
 
@@ -217,7 +217,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
     max_critic_scale = 0.0
 
     for ep in range(1, episodes + 1):
-        if ep <= 2000:
+        if ep <= 5000:
             prob = [1.0, 0.0]
             optimal = 0
         else:
@@ -263,7 +263,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
         # EXPECTED UNCERTAINTY (Variance bounds)
         current_sigma = torch.sqrt(var_curr.detach()).item()
         current_sigma = max(current_sigma, SURPRISE_EPS)
-        avg_expected = (1.0 - EXP_SURPRISE_DECAY) * avg_expected + EXP_SURPRISE_DECAY * current_sigma
+        avg_expected = (1.0 - EXP_SURPRISE_DECAY) * avg_expected + EXP_SURPRISE_DECAY * current_sigma ** 2
 
         # UNEXPECTED UNCERTAINTY (Fast-Slow TD)
         td_signal = abs(td_error_val) / (current_sigma ** SURPRISE_VARIANCE_WEIGHT)
@@ -290,7 +290,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
             accuracy = np.mean(reward_history[-200:]) * 100 if len(reward_history) >= 200 else np.mean(reward_history) * 100
             print(
                 f"Ep {ep:4d} | Opt%: {accuracy:5.1f} | NE: {current_ne:.2f} | ACh: {current_ach:.4f} | LR: {actor_lr_state:.4f} | CriticScale: {critic_scale:.3f} | "
-                f"Unexpected: {avg_unexpected:.3f} | Expected: {avg_expected:.3f}"
+                f"Unexpected: {avg_unexpected:.3f} | Expected: {avg_expected:.3f} | Var: {var_curr.item():.4f}"
             )
 
     plot_episodes = list(range(50, episodes + 1, 50))
@@ -301,15 +301,15 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
 
     plt.figure(figsize=(10, 6))
     plt.plot(plot_episodes, reward_rates, linewidth=2, color="tab:blue", label="Reward Rate")
-    plt.axvline(x=2000, color="tab:red", linestyle="--", label="Switch")
+    plt.axvline(x=5000, color="tab:red", linestyle="--", label="Switch")
     plt.xlabel("Episode")
     plt.ylabel("Reward Rate (%)")
     plt.ylim(0, 105)
-    plt.title("Switch Bandit - Classic")
+    plt.title("Switch Bandit - Decoupled Icarus Upgraded")
     plt.grid(True, alpha=0.3)
     plt.legend(loc="lower right")
     
-    out_dir = f"switch_bandit_experiment/runs/{seed}_classic" if seed is not None else "switch_bandit_experiment/runs/noseed_classic"
+    out_dir = f"switch_bandit_experiment/runs/{seed}_icarus_upgraded" if seed is not None else "switch_bandit_experiment/runs/noseed_icarus_upgraded"
     os.makedirs(out_dir, exist_ok=True)
 
     png_path = os.path.join(out_dir, "plot.png")
@@ -331,7 +331,7 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=4000)
+    parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=None, help="Random seed (optional)")
     args = parser.parse_args()
     train(args.episodes, seed=args.seed)

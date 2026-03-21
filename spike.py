@@ -81,10 +81,10 @@ VAR_DECAY = 0
 SWITCH_EPISODE = 5000
 ACTOR_LR_BASE = 0.0001
 ACTOR_LR_PEAK = 0.03
-ACTOR_LR_ANNEAL_EPISODES = 200 
+ACTOR_LR_ANNEAL_EPISODES = 400 
 
 # Editable global seed (set to None for non-deterministic runs)
-SEED = 1235
+SEED = 12356
 
 
 def set_global_seed(seed: int | None):
@@ -297,15 +297,51 @@ def train(args):
 
         inverted = (ep > SWITCH_EPISODE)
 
-        # UNSTABLE LR ANNEALING SCHEDULE
+        # MULTI-PROFILE LR ANNEALING SCHEDULE
         if ep < SWITCH_EPISODE:
             actor_lr = ACTOR_LR_BASE
-        elif ep < SWITCH_EPISODE + ACTOR_LR_ANNEAL_EPISODES:
-            frac = (ep - SWITCH_EPISODE) / ACTOR_LR_ANNEAL_EPISODES
-            # Decreasing sinusoidal: envelope decreases linearly, oscillation adds "instability"
-            envelope = (1.0 - frac)
-            oscillation = 0.5 * (1.0 + math.cos(100 * math.pi * frac)) # 5 cycles
-            actor_lr = ACTOR_LR_BASE + (ACTOR_LR_PEAK - ACTOR_LR_BASE) * envelope * oscillation
+        elif ep < SWITCH_EPISODE + args.anneal_episodes:
+            frac = (ep - SWITCH_EPISODE) / args.anneal_episodes
+            
+            if args.profile == "sinusoidal":
+                # Decreasing sinusoidal: envelope decreases linearly, oscillation adds "instability"
+                envelope = (1.0 - frac)
+                oscillation = 0.5 * (1.0 + math.cos(5 * math.pi * frac)) 
+                actor_lr = ACTOR_LR_BASE + (ACTOR_LR_PEAK - ACTOR_LR_BASE) * envelope * oscillation
+                
+            elif args.profile == "sawtooth":
+                # Sharp resets to decaying peak
+                envelope = (1.0 - frac)
+                saw = 1.0 - ((frac * 5) % 1.0)
+                actor_lr = ACTOR_LR_BASE + (ACTOR_LR_PEAK - ACTOR_LR_BASE) * envelope * saw
+                
+            elif args.profile == "exponential":
+                # Smooth exponential decay
+                actor_lr = ACTOR_LR_BASE + (ACTOR_LR_PEAK - ACTOR_LR_BASE) * math.exp(-6 * frac)
+                
+            elif args.profile == "stochastic":
+                # Linear decay with random high-magnitude spikes
+                base_decay = ACTOR_LR_BASE + (ACTOR_LR_PEAK - ACTOR_LR_BASE) * (1.0 - frac)
+                if random.random() < args.stochastic_prob: 
+                    actor_lr = ACTOR_LR_PEAK * (1.0 - frac * args.stochastic_magnitude)
+                else:
+                    actor_lr = base_decay
+                    
+            elif args.profile == "plateau_spike":
+                # Step-wise plateaus with a burst at each step start
+                steps = 4
+                step_idx = math.floor(frac * steps)
+                step_start_frac = step_idx / steps
+                intra_step_frac = (frac * steps) % 1.0
+                
+                plateau_val = 1.0 - step_start_frac
+                # Add a sharp burst at the start of each plateau
+                burst = math.exp(-10 * intra_step_frac) 
+                actor_lr = ACTOR_LR_BASE + (ACTOR_LR_PEAK - ACTOR_LR_BASE) * plateau_val * (0.3 + 0.7 * burst)
+                
+            else:
+                # Fallback to linear
+                actor_lr = ACTOR_LR_BASE + (ACTOR_LR_PEAK - ACTOR_LR_BASE) * (1.0 - frac)
         else:
             actor_lr = ACTOR_LR_BASE
 
@@ -477,7 +513,11 @@ def train(args):
     fig.tight_layout()
     plt.title("Switch CartPole - Decoupled Uncertainty (TD-LTP Critic, Sinusoidal Actor LR)")
 
-    run_tag = "spike"
+    if args.profile == "stochastic":
+        run_tag = f"spike_stoc_p{args.stochastic_prob}_a{args.anneal_episodes}_m{args.stochastic_magnitude}"
+    else:
+        run_tag = f"spike_{args.profile}"
+    
     out_dir = os.path.join("cartpole", "runs", run_tag)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -495,8 +535,13 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=10000)
+    parser.add_argument("--episodes", type=int, default=15000)
     parser.add_argument("--render", action="store_true")
+    parser.add_argument("--profile", type=str, default="sinusoidal", 
+                        choices=["sinusoidal", "sawtooth", "exponential", "stochastic", "plateau_spike"])
+    parser.add_argument("--anneal_episodes", type=int, default=ACTOR_LR_ANNEAL_EPISODES)
+    parser.add_argument("--stochastic_prob", type=float, default=0.05)
+    parser.add_argument("--stochastic_magnitude", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
     parser.add_argument("--base_noise", type=float, default=BASE_NOISE)
