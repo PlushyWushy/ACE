@@ -539,7 +539,8 @@ class Reward_fn():
 
 class Snn_actor():
     def __init__(self, network, batch_size, state_to_spike, augment_state, env_dt, reward_adj, actor_m, num_actions, num_actors_pa, actor_active, entropy_reg, freeze_action, var_lr_base=0.000125, 
-                 use_ach_lr_mod=False, use_ne_noise=False, base_lr=0.0000025, actor_lr_min=1e-4, actor_lr_max=0.001, actor_lr_decay=0.1, actor_lr_boost=0.1, 
+                 use_ne_noise=False, base_lr=0.0000625,
+                 use_switch_lr_spike=True, switch_at=1000, switch_lr_peak=0.001, switch_lr_hold_eps=1, switch_lr_anneal_eps=100,
                  base_noise=1.0, ne_max=3.0, ne_k=0.2, ne_center=15.0, ach_max=1.0, ach_k=10.0, ach_center=5.0, 
                  td_signal_clip=20.0, td_fast_alpha=0.097663, td_slow_alpha=0.003642, unexp_decay=0.8, 
                  exp_fast_alpha=1.0, exp_slow_alpha=0.1, exp_decay=0.01, surprise_variance_weight=0.0, td_novelty_margin=0.0,
@@ -558,13 +559,14 @@ class Snn_actor():
         self.freeze_action = freeze_action    
         self.var_lr_base = float(var_lr_base)
         
-        self.use_ach_lr_mod = use_ach_lr_mod
         self.use_ne_noise = use_ne_noise
         self.base_lr = base_lr
-        self.actor_lr_min = actor_lr_min
-        self.actor_lr_max = actor_lr_max
-        self.actor_lr_decay = actor_lr_decay
-        self.actor_lr_boost = actor_lr_boost
+        
+        self.use_switch_lr_spike = bool(use_switch_lr_spike)
+        self.switch_at = int(switch_at)
+        self.switch_lr_peak = float(switch_lr_peak)
+        self.switch_lr_hold_eps = int(switch_lr_hold_eps)
+        self.switch_lr_anneal_eps = int(switch_lr_anneal_eps)
         
         self.base_noise = base_noise
         self.ne_max = ne_max
@@ -598,7 +600,7 @@ class Snn_actor():
         self.avg_expected = 0.0
         
         self.current_ne = float(self.base_noise)
-        self.current_ach = 0.0  # Or another baseline
+        self.current_ach = 0.0
         
         self.last_metrics = {}
         self.last_td_signal = 0.0
@@ -629,12 +631,28 @@ class Snn_actor():
         if getattr(rule, "adam", False) and hasattr(rule, "optimzier"):
             rule.optimzier.learning_rate = float(lr)
 
-    def __call__(self, state, reward, isEnd, info):    
+    def __call__(self, state, reward, isEnd, info, episode_counts=None):    
         network = self.network
         if np.any(info["stateCode"]==2): network.reset_state_variables(info["stateCode"]==2)    
         
         self._set_connection_lr(("H0", "CV"), self.var_lr_base)
-        actor_lr_used = self.actor_lr_state if self.use_ach_lr_mod else self.base_lr
+        actor_lr_used = self.base_lr
+        if self.use_switch_lr_spike and episode_counts is not None and self.switch_at >= 0:
+            ep0 = int(np.asarray(episode_counts).reshape(-1)[0])
+            if ep0 < self.switch_at:
+                actor_lr_used = self.base_lr
+            else:
+                t = ep0 - self.switch_at
+                if t < max(self.switch_lr_hold_eps, 0):
+                    actor_lr_used = self.switch_lr_peak
+                else:
+                    ta = t - max(self.switch_lr_hold_eps, 0)
+                    if ta < max(self.switch_lr_anneal_eps, 0):
+                        frac = 1.0 - (ta / max(float(self.switch_lr_anneal_eps), 1.0))
+                        actor_lr_used = self.base_lr + (self.switch_lr_peak - self.base_lr) * frac
+                    else:
+                        actor_lr_used = self.base_lr
+            self.actor_lr_state = float(actor_lr_used)
         self._set_connection_lr(("H0", "AE"), actor_lr_used)
 
         p = self.p
@@ -681,10 +699,7 @@ class Snn_actor():
         self.current_ne = float(logistic_drive(self.ne_max, self.ne_k, self.ne_center, self.avg_unexpected, self.base_noise))
         self.current_ne = float(min(self.current_ne, 5.0))
 
-        if self.use_ach_lr_mod:
-            self.actor_lr_state *= (1.0 - self.actor_lr_decay)
-            self.actor_lr_state += self.actor_lr_boost * self.current_ach
-            self.actor_lr_state = float(min(max(self.actor_lr_state, self.actor_lr_min), self.actor_lr_max))
+
 
         if self.actor_active:
             actor_exc = network.layers["AE"]
@@ -776,15 +791,15 @@ if __name__ == "__main__":
     var_eps = 1e-6
     var_lr = 0.000125
     
-    # Icarus Neuromodulation Parameters
-    use_ach_lr_mod = True
+    # Spike LR Schedule Parameters
     use_ne_noise = True
+    use_switch_lr_spike = True
+    switch_at = 1000          # episode at which thruster swap occurs
+    switch_lr_peak = 0.001    # peak actor LR at the switch
+    switch_lr_hold_eps = 1    # episodes to hold peak before annealing
+    switch_lr_anneal_eps = 50 # episodes to linearly anneal back to base
     
     base_lr = 0.0000625
-    actor_lr_min = 0.0000625  # Replaced from 1e-4 to allow bottoming out at base
-    actor_lr_max = 0.001
-    actor_lr_decay = 0.9999
-    actor_lr_boost = 0.0001
     
     base_noise = 1.0
     ne_max = 3.0
@@ -793,7 +808,7 @@ if __name__ == "__main__":
     
     ach_max = 1.0
     ach_k = 10.0
-    ach_center = 0.001
+    ach_center = 0.005
     
     td_signal_clip = 20.0
     td_fast_alpha = 0.097663
@@ -828,7 +843,7 @@ if __name__ == "__main__":
     tau_v = 100.0
     targ_firing_r = 0.0
     targ_firing_rate = 0.0
-    name = "ll_std"
+    name = "ll_spike"
     test = False
     checkpoint = "model_ll_std_0.pt"
     test_eps = 100
@@ -974,13 +989,13 @@ if __name__ == "__main__":
             entropy_reg=entropy_reg, 
             freeze_action=freeze_action,
             var_lr_base=var_lr,
-            use_ach_lr_mod=use_ach_lr_mod,
             use_ne_noise=use_ne_noise,
             base_lr=base_lr,
-            actor_lr_min=actor_lr_min,
-            actor_lr_max=actor_lr_max,
-            actor_lr_decay=actor_lr_decay,
-            actor_lr_boost=actor_lr_boost,
+            use_switch_lr_spike=use_switch_lr_spike,
+            switch_at=switch_at,
+            switch_lr_peak=switch_lr_peak,
+            switch_lr_hold_eps=switch_lr_hold_eps,
+            switch_lr_anneal_eps=switch_lr_anneal_eps,
             base_noise=base_noise,
             ne_max=ne_max,
             ne_k=ne_k,
@@ -1005,6 +1020,7 @@ if __name__ == "__main__":
         eps_ret, eps_len = [], []  
         c_eps_ret = np.zeros(batch_size)
         c_eps_len = np.zeros(batch_size)
+        ep_counts = np.zeros(batch_size, dtype=np.int64)
         step, p_eps = 0, 0
         f_perfect, solved = False, False
 
@@ -1015,7 +1031,7 @@ if __name__ == "__main__":
         
         while True:
             step += 1
-            action, stat = snn_actor(state, reward, isEnd, info)
+            action, stat = snn_actor(state, reward, isEnd, info, episode_counts=len(eps_ret))
 
             action_arr = np.asarray(action)
             if action_arr.shape == ():
@@ -1023,7 +1039,7 @@ if __name__ == "__main__":
 
             # Invert controls for LunarLander at eps >= 2000 (Swap Left and Right)
             real_action = action_arr.copy()
-            if len(eps_ret) >= 1:
+            if len(eps_ret) >= 10:
                 mask_1 = (action_arr == 1)
                 mask_3 = (action_arr == 3)
                 real_action[mask_1] = 3
@@ -1036,6 +1052,7 @@ if __name__ == "__main__":
             c_eps_len += env_dt
             new_end = np.logical_and(isEnd == False, _isEnd==True)
             if np.any(new_end):
+                ep_counts[new_end] += 1
                 eps_ret.extend(c_eps_ret[new_end].tolist())
                 eps_len.extend(c_eps_len[new_end].tolist())      
                 c_eps_ret[new_end] = 0.
@@ -1048,8 +1065,8 @@ if __name__ == "__main__":
                     curr_ne = getattr(snn_actor, "current_ne", 0.0)
                     curr_ach = getattr(snn_actor, "current_ach", 0.0)
                     curr_lr = getattr(snn_actor, "actor_lr_state", base_lr)
-                    print("%d: Ret: %.2f; Last 100 Avg Ret: %.2f; Var: %.8f; NE: %.3f; ACh: %.3f; ActLR: %.8f; Solved: %s" % (
-                            p_eps, eps_ret[p_eps-1], np.average(eps_ret[max(0, p_eps-100):p_eps]), mean_var, curr_ne, curr_ach, curr_lr, "Y" if solved else "N"))            
+                    print("%d: Ret: %.2f; Last 100 Avg Ret: %.2f; Var: %.8f; NE: %.3f; ACh: %.3f; ActLR: %.8f; EpCount0: %d; Solved: %s" % (
+                            p_eps, eps_ret[p_eps-1], np.average(eps_ret[max(0, p_eps-100):p_eps]), mean_var, curr_ne, curr_ach, curr_lr, ep_counts[0], "Y" if solved else "N"))            
                 if env_name in solve_def:          
                     avg_n, p_score = solve_def[env_name]
                     if not f_perfect and np.amax(eps_ret) >= p_score: f_perfect = True           
