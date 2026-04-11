@@ -639,10 +639,10 @@ class Snn_actor():
         actor_lr_used = self.base_lr
         if self.use_switch_lr_spike and episode_counts is not None and self.switch_at >= 0:
             ep0 = int(np.asarray(episode_counts).reshape(-1)[0])
-            if ep0 < self.switch_at:
+            if ep0 < self.switch_at + getattr(self, "switch_lr_delay_eps", 0):
                 actor_lr_used = self.base_lr
             else:
-                t = ep0 - self.switch_at
+                t = ep0 - (self.switch_at + getattr(self, "switch_lr_delay_eps", 0))
                 if t < max(self.switch_lr_hold_eps, 0):
                     actor_lr_used = self.switch_lr_peak
                 else:
@@ -759,12 +759,21 @@ if __name__ == "__main__":
     model_dir = os.path.join(script_dir, "model")
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
+    
+    # Setup internal file logging
+    log_path_env = os.environ.get("SWEEP_LOG_PATH")
+    if log_path_env:
+        log_file = sys.stdout
+    else:
+        log_path = os.path.join(result_dir, "training_log_spike.txt")
+        log_file = open(log_path, "w", buffering=1)
+        print(f"Logging episode data to: {log_path} (Terminal output suppressed for episodes)")
 
     # Parameters from config_ll.ini
     gpu_flag = True
     min_eps = 3000
-    max_eps = 10000
-    n_run = 10
+    max_eps = 2000
+    n_run = 1
     batch_size = 16
     input_type = 2 # Fourier
     augment_state = False
@@ -789,12 +798,13 @@ if __name__ == "__main__":
     var_m = 0.01
     var_b = 0.0
     var_eps = 1e-6
-    var_lr = 0.000125
+    var_lr = 0.05
     
     # Spike LR Schedule Parameters
     use_ne_noise = True
     use_switch_lr_spike = True
     switch_at = 1000          # episode at which thruster swap occurs
+    switch_lr_delay_eps = 7  # delay spike by 30 episodes after the switch
     switch_lr_peak = 0.001    # peak actor LR at the switch
     switch_lr_hold_eps = 1    # episodes to hold peak before annealing
     switch_lr_anneal_eps = 50 # episodes to linearly anneal back to base
@@ -816,7 +826,7 @@ if __name__ == "__main__":
     unexp_decay = 0.8
     
     exp_fast_alpha = 1.0
-    exp_slow_alpha = 0.1
+    exp_slow_alpha = 0.001  # Approximately 5 episodes of memory (1000 steps)
     exp_decay = 0.01
     surprise_variance_weight = 0.0
     td_novelty_margin = 0.0
@@ -1020,8 +1030,9 @@ if __name__ == "__main__":
         eps_ret, eps_len = [], []  
         c_eps_ret = np.zeros(batch_size)
         c_eps_len = np.zeros(batch_size)
-        ep_counts = np.zeros(batch_size, dtype=np.int64)
+        ep_counts = np.zeros(batch_size, dtype=int)
         step, p_eps = 0, 0
+        plot_episodes, plot_rewards, plot_avg_rewards, plot_variances, plot_lrs = [], [], [], [], []
         f_perfect, solved = False, False
 
         state = env.reset()
@@ -1037,9 +1048,9 @@ if __name__ == "__main__":
             if action_arr.shape == ():
                 action_arr = action_arr.reshape(-1)
 
-            # Invert controls for LunarLander at eps >= 2000 (Swap Left and Right)
+            # Invert controls for LunarLander at eps >= 1000 (Swap Left and Right)
             real_action = action_arr.copy()
-            if len(eps_ret) >= 10:
+            if len(eps_ret) >= 1000:
                 mask_1 = (action_arr == 1)
                 mask_3 = (action_arr == 3)
                 real_action[mask_1] = 3
@@ -1057,16 +1068,24 @@ if __name__ == "__main__":
                 eps_len.extend(c_eps_len[new_end].tolist())      
                 c_eps_ret[new_end] = 0.
                 c_eps_len[new_end] = 0.    
-                while len(eps_ret) >= p_eps + 10:      
-                    p_eps += 10
+                while len(eps_ret) >= p_eps + 1:      
+                    p_eps += 1
                     mean_var = 0.0
                     if "CV" in network.layers:
                          mean_var = torch.mean(network.reward_fn.var_rec).item()
                     curr_ne = getattr(snn_actor, "current_ne", 0.0)
                     curr_ach = getattr(snn_actor, "current_ach", 0.0)
                     curr_lr = getattr(snn_actor, "actor_lr_state", base_lr)
-                    print("%d: Ret: %.2f; Last 100 Avg Ret: %.2f; Var: %.8f; NE: %.3f; ACh: %.3f; ActLR: %.8f; EpCount0: %d; Solved: %s" % (
-                            p_eps, eps_ret[p_eps-1], np.average(eps_ret[max(0, p_eps-100):p_eps]), mean_var, curr_ne, curr_ach, curr_lr, ep_counts[0], "Y" if solved else "N"))            
+                    avg_ret_100 = np.average(eps_ret[max(0, p_eps-100):p_eps])
+                    log_str = "%d: Ret: %.2f; Last 100 Avg Ret: %.2f; Var: %.8f; NE: %.3f; ACh: %.3f; ActLR: %.8f; EpCount0: %d; Solved: %s" % (
+                            p_eps, eps_ret[p_eps-1], avg_ret_100, mean_var, curr_ne, curr_ach, curr_lr, ep_counts[0], "Y" if solved else "N")
+                    log_file.write(log_str + "\n")
+                    # print(log_str) # Suppressed as per user request
+                    plot_episodes.append(p_eps)
+                    plot_rewards.append(eps_ret[p_eps-1])
+                    plot_avg_rewards.append(avg_ret_100)
+                    plot_variances.append(mean_var)
+                    plot_lrs.append(curr_lr)
                 if env_name in solve_def:          
                     avg_n, p_score = solve_def[env_name]
                     if not f_perfect and np.amax(eps_ret) >= p_score: f_perfect = True           
@@ -1085,3 +1104,30 @@ if __name__ == "__main__":
     f_save = os.path.join(result_dir, "rewards_%s_all.pkl" %(name))
     with open(f_save, 'wb') as f: pickle.dump(results, f)    
     print("Training Complete.")
+
+    # --- Plot Reward, Variance, Learning Rate ---
+    if len(plot_episodes) > 0:
+        fig, axes = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+
+        axes[0].plot(plot_episodes, plot_rewards, color='lightgray', alpha=0.6, label='Return')
+        axes[0].plot(plot_episodes, plot_avg_rewards, color='blue', linewidth=2, label='Last 100 Avg Return')
+        axes[0].set_ylabel('Reward')
+        axes[0].set_title('Reward over Episodes (Spike)')
+        axes[0].legend()
+        axes[0].grid(True)
+
+        axes[1].plot(plot_episodes, plot_variances, color='orange')
+        axes[1].set_ylabel('Variance')
+        axes[1].set_title('Variance over Episodes')
+        axes[1].grid(True)
+
+        axes[2].plot(plot_episodes, plot_lrs, color='green')
+        axes[2].set_ylabel('Learning Rate')
+        axes[2].set_xlabel('Episode')
+        axes[2].set_title('Actor Learning Rate over Episodes')
+        axes[2].grid(True)
+
+        plt.tight_layout()
+        plot_path = os.path.join(result_dir, "training_metrics_spike.png")
+        plt.savefig(plot_path)
+        print(f"Plot saved to {plot_path}")

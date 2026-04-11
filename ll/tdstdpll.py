@@ -744,6 +744,15 @@ if __name__ == "__main__":
     model_dir = os.path.join(script_dir, "model")
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
+    
+    # Setup internal file logging
+    log_path_env = os.environ.get("SWEEP_LOG_PATH")
+    if log_path_env:
+        log_file = sys.stdout
+    else:
+        log_path = os.path.join(result_dir, "training_log.txt")
+        log_file = open(log_path, "w", buffering=1)
+        print(f"Logging episode data to: {log_path} (Terminal output suppressed for episodes)")
 
     # Parameters from config_ll.ini
     gpu_flag = True
@@ -774,7 +783,7 @@ if __name__ == "__main__":
     var_m = 0.01
     var_b = 0.0
     var_eps = 1e-6
-    var_lr = 0.000125
+    var_lr = 0.0002
     
     # Icarus Neuromodulation Parameters
     use_ach_lr_mod = True
@@ -783,9 +792,9 @@ if __name__ == "__main__":
     base_lr = 0.0000625
     actor_lr_min = 0.0000625  # Replaced from 1e-4 to allow bottoming out at base
     actor_lr_max = 0.001
-    actor_lr_decay = 0.99999
+    actor_lr_decay = 0.1
     
-    actor_lr_boost = 0.01
+    actor_lr_boost = 0.1
     
     base_noise = 1.0
     ne_max = 3.0
@@ -794,7 +803,7 @@ if __name__ == "__main__":
     
     ach_max = 1
     ach_k = 1000.0
-    ach_center = 0.09
+    ach_center = 0.08
     
     td_signal_clip = 20.0
     td_fast_alpha = 0.097663
@@ -802,7 +811,7 @@ if __name__ == "__main__":
     unexp_decay = 0.8
     
     exp_fast_alpha = 1.0
-    exp_slow_alpha = 0.1
+    exp_slow_alpha = 0.01 # Approximately 5 episodes of memory (1000 steps)
     exp_decay = 0.01
     surprise_variance_weight = 0.0
     td_novelty_margin = 0.0
@@ -1042,8 +1051,8 @@ if __name__ == "__main__":
                 eps_len.extend(c_eps_len[new_end].tolist())      
                 c_eps_ret[new_end] = 0.
                 c_eps_len[new_end] = 0.    
-                while len(eps_ret) >= p_eps + 10:      
-                    p_eps += 10
+                while len(eps_ret) >= p_eps + 1:      
+                    p_eps += 1
                     mean_var = 0.0
                     if "CV" in network.layers:
                          mean_var = torch.mean(network.reward_fn.var_rec).item()
@@ -1051,8 +1060,10 @@ if __name__ == "__main__":
                     curr_ach = getattr(snn_actor, "current_ach", 0.0)
                     curr_lr = getattr(snn_actor, "actor_lr_state", base_lr)
                     avg_ret_100 = np.average(eps_ret[max(0, p_eps-100):p_eps])
-                    print("%d: Ret: %.2f; Last 100 Avg Ret: %.2f; Var: %.8f; NE: %.3f; ACh: %.3f; ActLR: %.8f; Solved: %s" % (
-                            p_eps, eps_ret[p_eps-1], avg_ret_100, mean_var, curr_ne, curr_ach, curr_lr, "Y" if solved else "N"))
+                    log_str = "%d: Ret: %.2f; Last 100 Avg Ret: %.2f; Var: %.8f; NE: %.3f; ACh: %.3f; ActLR: %.8f; Solved: %s" % (
+                            p_eps, eps_ret[p_eps-1], avg_ret_100, mean_var, curr_ne, curr_ach, curr_lr, "Y" if solved else "N")
+                    log_file.write(log_str + "\n")
+                    # print(log_str) # Suppressed as per user request
                     plot_episodes.append(p_eps)
                     plot_rewards.append(eps_ret[p_eps-1])
                     plot_avg_rewards.append(avg_ret_100)
@@ -1100,6 +1111,12 @@ if __name__ == "__main__":
         axes[2].grid(True)
 
         plt.tight_layout()
-        plot_path = os.path.join(result_dir, "training_metrics.png")
+        
+        # Save to dynamic path for sweeps
+        plot_dir = os.environ.get("SWEEP_PLOT_DIR", result_dir)
+        os.makedirs(plot_dir, exist_ok=True)
+        plot_name = os.environ.get("SWEEP_PLOT_NAME", "training_metrics.png")
+        plot_path = os.path.join(plot_dir, plot_name)
+        
         plt.savefig(plot_path)
         print(f"Plot saved to {plot_path}")
