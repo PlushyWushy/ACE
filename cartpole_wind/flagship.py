@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Switch Acrobot with decoupled uncertainty (Icarus variant):
+Switch CartPole with decoupled uncertainty following Yu & Dayan's conjecture:
 - NE (Noradrenaline) driven by *unexpected* uncertainty (fast-slow TD novelty)
 - ACh (Acetylcholine) driven by *expected* uncertainty (critic's variance estimate)
 
-ACh is used directly as actor LR (with BASE_LR as the floor).
-
-At the switch point the physical link parameters are swapped, so the
-torque that was being applied to the "elbow" joint now effectively acts
-on the "shoulder" joint, creating a structural surprise.
+Critic uses a local TD-LTP style update with loss as a multiplicative factor.
+Actor LR decays each step and is boosted by ACh (not set equal to ACh).
 """
 
+#TODO: Run with low ACh center with switch; run with high ACh center without switch.
 import argparse
 import math
 import numpy as np
@@ -27,9 +25,9 @@ try:
 except ImportError:
     import gym
 
-# ---------------------------------------------------------------------------
-# Hyperparameters  (all editable here)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 
+# Constants
+# --------------------------------------------------------------------------- 
 
 DT = 0.02
 RHO_PC = 50.0
@@ -38,59 +36,61 @@ ACTOR_THETA = 2.0
 GAMMA = 0.99
 
 # --- NEUROMODULATION PARAMETERS ---
-BASE_LR = 0.05
-BASE_NOISE = 0.5
+BASE_LR = 0.000055 
+BASE_NOISE = 1
 
-# NE logistic mapping params (unexpected uncertainty / novelty)
+# NE logistic mapping params (for unexpected uncertainty / novelty)
 NE_MAX = 3
 NE_K = 0.2
-NE_CENTER = 15000
+NE_CENTER = 15
 
-# ACh logistic mapping params (expected uncertainty / variance)
+# ACh logistic mapping params (for expected uncertainty / variance)
 ACH_MAX = 1
-ACH_K = 10
+ACH_K = 10 
 ACH_CENTER = 5
 
 # Surprise EMA
-EXP_SURPRISE_DECAY = 0.01
-UNEXP_SURPRISE_DECAY = 0.8
+EXP_SURPRISE_DECAY = 0.01  
+UNEXP_SURPRISE_DECAY = 0.8 
 
-# Variance weighting of surprise signal
+# If =1.0 -> divide by sigma (z-ish). If =0.0 -> ignore variance term.
 SURPRISE_VARIANCE_WEIGHT = 0
 SURPRISE_EPS = 1e-3
 
-# ---------------------------------------------------------------------------
-# Fast-slow TD novelty (unexpected uncertainty)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 
+# Fast–slow TD novelty (habituation / baseline subtraction) for UNEXPECTED uncertainty
+# --------------------------------------------------------------------------- 
+# TD signal is |TD| / (sigma**SURPRISE_VARIANCE_WEIGHT), then clipped.
 TD_SIGNAL_CLIP = 20.0
-TD_FAST_ALPHA = 0.097663   # ~20-step timescale
-TD_SLOW_ALPHA = 0.003642   # ~1000-step timescale
+
+# Fast trace reacts quickly; slow trace is "what I'm used to".
+TD_FAST_ALPHA = 0.097663     # ~20-step timescale
+TD_SLOW_ALPHA = 0.003642    # ~1000-step timescale
+
+# Faster traces for expected uncertainty (ACh)
+EXP_FAST_ALPHA = 1    # 
+EXP_SLOW_ALPHA = 0.1
+
+# Extra deadzone after baseline subtraction (helps suppress tiny random novelty).
 TD_NOVELTY_MARGIN = 0.0
 
-# ---------------------------------------------------------------------------
-# Actor / Critic LR params
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 
+# Actor LR modulation params
+# --------------------------------------------------------------------------- 
 CRITIC_BASE_LR = 0.001
+
 VAR_DECAY = 0
-ACTOR_LR_DECAY = 0
-ACTOR_LR_BOOST = 0
-ACTOR_LR_MIN = 0.05
-ACTOR_LR_MAX = 0.05
+ACTOR_LR_DECAY = 0.1  
+ACTOR_LR_BOOST = 0.1
+ACTOR_LR_MIN = 1e-4
+ACTOR_LR_MAX = 0.1
 
-# ---------------------------------------------------------------------------
-# Environment / experiment params
-# ---------------------------------------------------------------------------
-SWITCH_EP = 5000
-TOTAL_EPISODES = 10000
+# Editable global seed (set to None for non-deterministic runs)
 SEED = 1234
-
-# ---------------------------------------------------------------------------
-# Place Cell Encoder grid sizes (one per obs dim)
-# ---------------------------------------------------------------------------
-PC_GRID_SIZES = [5, 5, 5, 5, 4, 4]   # cos1, sin1, cos2, sin2, w1, w2
 
 
 def set_global_seed(seed: int | None):
+    """Set seeds for python, numpy and torch for reproducibility."""
     if seed is None:
         return
     random.seed(seed)
@@ -106,9 +106,10 @@ def set_global_seed(seed: int | None):
         pass
 
 
-def logistic_drive(max_val: float, k: float, center: float,
-                   signal: float, base: float) -> float:
+def logistic_drive(max_val: float, k: float, center: float, signal: float, base: float) -> float:
+    # numerically-stable logistic: clip the exponent to avoid overflow
     z = k * (signal - center)
+    # clip thresholds chosen to avoid math.exp overflow on most platforms
     if z >= 700:
         return max_val + base
     if z <= -700:
@@ -116,44 +117,27 @@ def logistic_drive(max_val: float, k: float, center: float,
     return max_val / (1.0 + math.exp(-z)) + base
 
 
-# ---------------------------------------------------------------------------
-# 1. Place Cell Encoder  (6-D for Acrobot)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 
+# 1. Place Cell Encoder
+# --------------------------------------------------------------------------- 
 class PlaceCellEncoder(nn.Module):
-    """Radial-basis / place-cell encoder for Acrobot's 6-D observation.
-
-    Observation layout:
-        [cos(θ1), sin(θ1), cos(θ2), sin(θ2), ω1, ω2]
-    Ranges:
-        cos/sin: [-1, 1]
-        ω1: [-4π, 4π] ≈ [-12.57, 12.57]
-        ω2: [-9π, 9π] ≈ [-28.27, 28.27]
-    """
-    def __init__(self, device: torch.device, grid_sizes=None):
+    def __init__(self, device: torch.device):
         super().__init__()
         self.device = device
-        gs = grid_sizes or PC_GRID_SIZES
+        m = torch.linspace(-2.5, 2.5, 6, device=device)
+        n = torch.linspace(-2.0, 2.0, 6, device=device)
+        p = torch.linspace(-0.25, 0.25, 8, device=device)
+        q = torch.linspace(-2.0, 2.0, 8, device=device)
 
-        # Observation ranges
-        lows  = [-1.0, -1.0, -1.0, -1.0, -4*math.pi, -9*math.pi]
-        highs = [ 1.0,  1.0,  1.0,  1.0,  4*math.pi,  9*math.pi]
-
-        linspaces = []
-        for lo, hi, n in zip(lows, highs, gs):
-            linspaces.append(torch.linspace(lo, hi, n, device=device))
-
-        mesh = torch.meshgrid(*linspaces, indexing="ij")
+        mesh = torch.meshgrid(m, n, p, q, indexing="ij")
         centers = torch.stack([x.flatten() for x in mesh], dim=1)
         self.register_buffer("centers", centers)
 
-        # Sigma = spacing / 1.5  (same heuristic as CartPole)
-        sigma_list = []
-        for ls in linspaces:
-            if len(ls) > 1:
-                sigma_list.append((ls[1] - ls[0]) / 1.5)
-            else:
-                sigma_list.append(torch.tensor(1.0, device=device))
-        sigmas = torch.stack(sigma_list).unsqueeze(0)
+        s1 = (m[1] - m[0]) / 1.5
+        s2 = (n[1] - n[0]) / 1.5
+        s3 = (p[1] - p[0]) / 1.5
+        s4 = (q[1] - q[0]) / 1.5
+        sigmas = torch.tensor([s1, s2, s3, s4], device=device).unsqueeze(0)
         self.register_buffer("sigmas", sigmas)
 
         self.n_neurons = centers.shape[0]
@@ -167,9 +151,9 @@ class PlaceCellEncoder(nn.Module):
         return spikes
 
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 
 # 2. Local TD-LTP Critic (value + variance)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 
 class LocalCritic:
     def __init__(self, n_input: int, device: torch.device):
         self.w_val = torch.zeros(n_input, device=device)
@@ -185,8 +169,8 @@ class LocalCritic:
         var = F.softplus(torch.dot(self.w_var, input_spikes) + self.b_var) + 1e-4
         return val, var
 
-    def update(self, input_spikes: torch.Tensor, td_error: torch.Tensor,
-               var: torch.Tensor, lr: float):
+    def update(self, input_spikes: torch.Tensor, td_error: torch.Tensor, var: torch.Tensor, lr: float):
+        # TD-LTP: local delta rule with loss as a multiplicative factor.
         val_loss = td_error.abs().detach()
         delta_val = lr * val_loss * td_error.detach()
         self.w_val += delta_val * input_spikes
@@ -196,29 +180,32 @@ class LocalCritic:
             self.w_var *= (1.0 - VAR_DECAY)
             self.b_var *= (1.0 - VAR_DECAY)
 
+        # Variance tracks squared TD error with a similar loss-scaled update.
+        # err_var = (td_error.detach().abs() - var.detach())
+        # var_loss = err_var.pow(2)
+        # delta_var = lr * var_loss * err_var
         target_var = td_error.detach().pow(2)
         err_var = target_var - var.detach()
-        delta_var = lr * err_var
+        delta_var = lr * err_var    
         self.w_var += delta_var * input_spikes
         self.b_var += delta_var
 
 
-# ---------------------------------------------------------------------------
-# 3. Modulated Actor  (3 actions for Acrobot)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- 
+# 3. Modulated Actor
+# --------------------------------------------------------------------------- 
 class ModulatedActor(nn.Module):
-    def __init__(self, n_input: int, n_actions: int, device: torch.device):
+    def __init__(self, n_input: int, device: torch.device):
         super().__init__()
         self.device = device
-        self.w = torch.empty(n_input, n_actions, device=device).normal_(0.0, 0.1)
+        self.w = torch.empty(n_input, 2, device=device).normal_(0.0, 0.1)
         self.z_eps = torch.zeros(n_input, device=device)
         self.decay_eps = math.exp(-DT / TAU_M)
 
     def reset_state(self):
         self.z_eps.zero_()
 
-    def forward(self, input_spikes: torch.Tensor,
-                noise_scale: float) -> Tuple[int, torch.Tensor]:
+    def forward(self, input_spikes: torch.Tensor, noise_scale: float) -> Tuple[int, torch.Tensor]:
         self.z_eps = self.z_eps * self.decay_eps + input_spikes
         v_det = torch.matmul(self.z_eps, self.w)
         noise = torch.randn_like(v_det) * noise_scale
@@ -237,37 +224,17 @@ class ModulatedActor(nn.Module):
             action = int(torch.argmax(v_mem).item())
         return action, spikes
 
-    def update(self, td_error: float, output_spikes: torch.Tensor,
-               current_lr: float):
+    def update(self, td_error: float, output_spikes: torch.Tensor, current_lr: float):
         eligibility = torch.outer(self.z_eps, output_spikes)
         self.w += current_lr * td_error * eligibility
         self.w.clamp_(-10.0, 10.0)
 
 
-# ---------------------------------------------------------------------------
-# 4. Joint-switch helper
-# ---------------------------------------------------------------------------
-def swap_link_params(env):
-    """Halve the upper link and add the removed length to the lower link.
-    Default: L1=1.0, L2=1.0  →  After: L1=0.5, L2=1.5
-    This fundamentally changes the swing-up dynamics."""
-    uw = env.unwrapped
-    half = uw.LINK_LENGTH_1 / 2.0
-    uw.LINK_LENGTH_2 += half
-    uw.LINK_LENGTH_1 = half
-    # Shift COM proportionally
-    uw.LINK_COM_POS_1 = uw.LINK_LENGTH_1 / 2.0
-    uw.LINK_COM_POS_2 = uw.LINK_LENGTH_2 / 2.0
-
-
-# ---------------------------------------------------------------------------
-# Training loop
-# ---------------------------------------------------------------------------
 def train(args):
     set_global_seed(args.seed)
     device = torch.device("cpu")
 
-    env = gym.make("Acrobot-v1", render_mode="human" if args.render else None)
+    env = gym.make("CartPole-v1", render_mode="human" if args.render else None)
 
     if args.seed is not None:
         try:
@@ -287,17 +254,20 @@ def train(args):
             pass
 
     encoder = PlaceCellEncoder(device)
-    actor = ModulatedActor(encoder.n_neurons, n_actions=3, device=device)
+    actor = ModulatedActor(encoder.n_neurons, device)
     critic = LocalCritic(encoder.n_neurons, device)
 
-    print(f"Acrobot Icarus | Episodes: {args.episodes} | Switch at: {args.switch_ep}")
-    print(f"Place-cell neurons: {encoder.n_neurons}")
+    print(f"Start Switch CartPole (Decoupled Uncertainty: NE~Novelty, ACh~Variance). Episodes: {args.episodes}")
 
-    # Traces
+    # Traces for unexpected uncertainty (novelty)
     td_fast = 0.0
     td_slow = 0.0
     td_trace_inited = False
+
+    # EMA of unexpected uncertainty (drives NE)
     avg_unexpected = 0.0
+
+    # EMA of expected uncertainty (drives ACh)
     avg_expected = 0.0
 
     reward_history = []
@@ -309,16 +279,10 @@ def train(args):
     actor_lr_history = []
     td_history = []
 
+    max_critic_scale = 0.0
     actor_lr_state = args.base_lr
-    switched = False
 
     for ep in range(args.episodes):
-        # ---- SWITCH ----
-        if ep == args.switch_ep and not switched:
-            swap_link_params(env)
-            switched = True
-            print(f">>> SWITCH at episode {ep}: link lengths changed (L1 halved, L2 extended) <<<")
-
         if args.seed is not None:
             try:
                 obs, _ = env.reset(seed=args.seed + ep)
@@ -338,12 +302,17 @@ def train(args):
         done = False
         total_reward = 0.0
 
-        # Neuromodulation
-        current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER,
-                                    avg_unexpected, args.base_noise)
+        wind_active = (ep > args.switch_ep)
+
+        # =====================================================================
+        # DECOUPLED NEUROMODULATION
+        # =====================================================================
+        # NE driven by unexpected uncertainty (novelty)
+        current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER, avg_unexpected, args.base_noise)
         current_ne = min(current_ne, 5.0)
-        current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER,
-                                     avg_expected, args.base_lr)
+
+        # ACh uses its own logistic (expected uncertainty -> modulatory signal).
+        current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
 
         td_sum = 0.0
         td_count = 0
@@ -353,17 +322,41 @@ def train(args):
         delta_var_sum = 0.0
         actor_lr_sum = 0.0
         actor_lr_count = 0
+
+        # For printing/debug visibility
         last_td_signal = 0.0
+        last_td_fast = td_fast
+        last_td_slow = td_slow
+        last_td_novelty = 0.0
 
         while not done:
             spikes = encoder(obs_t)
             action_code, act_spikes = actor(spikes, noise_scale=current_ne)
 
-            next_obs, reward, terminated, truncated, _ = env.step(action_code)
+            real_action = action_code
+
+            next_obs, reward, terminated, truncated, _ = env.step(real_action)
+            
+            # --- WIND DYNAMICS ---
+            if wind_active:
+                x, x_dot, theta, theta_dot = env.unwrapped.state
+                
+                # Constant gust of wind (Rightward force)
+                WIND_CART_ACCEL = 5.0
+                WIND_POLE_ACCEL = 2.0
+                
+                x_dot += WIND_CART_ACCEL * DT
+                theta_dot += WIND_POLE_ACCEL * DT
+                
+                env.unwrapped.state = (x, x_dot, theta, theta_dot)
+                next_obs = np.array(env.unwrapped.state, dtype=np.float32)
+
             done = terminated or truncated
             next_obs_t = torch.tensor(next_obs, dtype=torch.float32, device=device)
 
-            # Critic
+            # ------------------------------- 
+            # Critic update
+            # ------------------------------- 
             v_curr, var_curr = critic.forward(spikes)
             var_sum += float(var_curr.item())
             var_count += 1
@@ -389,24 +382,29 @@ def train(args):
             delta_var_val = critic_lr * abs(err_var_val) * err_var_val
             delta_var_sum += delta_var_val
 
-            # Actor LR via ACh
             actor_lr_state *= (1.0 - args.actor_lr_decay)
             actor_lr_state += args.actor_lr_boost * current_ach
-            actor_lr_state = min(max(actor_lr_state, args.actor_lr_min),
-                                 args.actor_lr_max)
+            actor_lr_state = min(max(actor_lr_state, args.actor_lr_min), args.actor_lr_max)
             actor_lr = actor_lr_state
             actor_lr_sum += actor_lr
             actor_lr_count += 1
 
+            # ------------------------------- 
+            # Actor update
+            # ------------------------------- 
             actor.update(td_error_val, act_spikes, current_lr=actor_lr)
 
-            # Expected uncertainty (EMA of critic variance)
+            # =====================================================================
+            # EXPECTED UNCERTAINTY: Direct EMA of critic's variance estimate
+            # =====================================================================
             current_sigma = torch.sqrt(var_curr.detach()).item()
             current_sigma = max(current_sigma, SURPRISE_EPS)
-            avg_expected = ((1.0 - EXP_SURPRISE_DECAY) * avg_expected
-                            + EXP_SURPRISE_DECAY * current_sigma)
+            
+            avg_expected = (1.0 - EXP_SURPRISE_DECAY) * avg_expected + EXP_SURPRISE_DECAY * current_sigma
 
-            # Unexpected uncertainty (fast-slow TD novelty)
+            # =====================================================================
+            # UNEXPECTED UNCERTAINTY: Fast-slow TD novelty
+            # =====================================================================
             td_signal = abs(td_error_val) / (current_sigma ** SURPRISE_VARIANCE_WEIGHT)
             td_signal = float(min(max(td_signal, 0.0), TD_SIGNAL_CLIP))
 
@@ -415,23 +413,25 @@ def train(args):
                 td_slow = td_signal
                 td_trace_inited = True
             else:
-                td_fast = ((1.0 - args.td_fast_alpha) * td_fast
-                           + args.td_fast_alpha * td_signal)
-                td_slow = ((1.0 - args.td_slow_alpha) * td_slow
-                           + args.td_slow_alpha * td_signal)
+                td_fast = (1.0 - args.td_fast_alpha) * td_fast + args.td_fast_alpha * td_signal
+                td_slow = (1.0 - args.td_slow_alpha) * td_slow + args.td_slow_alpha * td_signal
 
             td_novelty = max(0.0, td_fast - td_slow - TD_NOVELTY_MARGIN)
-            avg_unexpected = UNEXP_SURPRISE_DECAY * avg_unexpected + td_novelty
+            avg_unexpected = UNEXP_SURPRISE_DECAY * avg_unexpected + td_novelty #(1.0 - UNEXP_SURPRISE_DECAY) * td_novelty
 
-            current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER,
-                                        avg_unexpected, args.base_noise)
+            # Update dynamics for next step
+            current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER, avg_unexpected, args.base_noise)
             current_ne = min(current_ne, 5.0)
-            current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER,
-                                         avg_expected, args.base_lr)
+            current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
 
             obs_t = next_obs_t
             total_reward += float(reward)
+
+            # keep last-step debug values for printouts
             last_td_signal = td_signal
+            last_td_fast = td_fast
+            last_td_slow = td_slow
+            last_td_novelty = td_novelty
 
         reward_history.append(total_reward)
         unexpected_history.append(avg_unexpected)
@@ -449,26 +449,23 @@ def train(args):
         avg_r = float(np.mean(reward_history[-20:])) if len(reward_history) > 0 else 0.0
 
         if ep % 100 == 0:
-            status = "NORMAL" if not switched or ep < args.switch_ep else "SWITCHED"
+            status = "NORMAL" if not wind_active else "WINDY"
             print(
-                f"Ep {ep:5d} | {status:8s} | R: {total_reward:7.1f} | "
-                f"Avg20: {avg_r:7.1f} | NE: {current_ne:.2f} | "
-                f"ACh: {current_ach:.4f} | LR: {mean_actor_lr:.6f} | "
-                f"Unexpected: {avg_unexpected:.2f} | Expected: {avg_expected:.2f}"
+                f"Ep {ep:4d} | {status} | R: {total_reward:3.0f} | Avg: {avg_r:4.1f} | "
+                f"NE: {current_ne:.2f} | ACh: {current_ach:.4f} | LR: {mean_actor_lr:.6f} | "
+                f"TDsig: {last_td_signal:.2f} | Unexpected: {avg_unexpected:.2f} | Expected: {avg_expected:.2f}"
             )
+
+    print(f"Max Critic Scale: {max_critic_scale:.3f}")
 
     # -----------------------------------------------------------------------
     # Plot (3 separate subplots for readability)
     # -----------------------------------------------------------------------
-    out_dir = (f"acrobot/runs/{args.seed}_flagship" if args.seed is not None
-               else "acrobot/runs/noseed_flagship")
-    os.makedirs(out_dir, exist_ok=True)
-
     episodes_x = range(len(reward_history))
     window_size = 20
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
-    fig.suptitle("Switch Acrobot — Icarus (Decoupled Uncertainty)", fontsize=14)
+    fig.suptitle("Switch CartPole Wind — Icarus (Decoupled Uncertainty)", fontsize=14)
 
     # --- Subplot 1: Reward ---
     ax1.plot(episodes_x, reward_history,
@@ -478,7 +475,7 @@ def train(args):
                               np.ones(window_size) / window_size, mode="valid")
         ax1.plot(range(window_size - 1, len(reward_history)), rolling,
                  color="tab:blue", linewidth=2, label=f"{window_size}-ep Avg")
-    ax1.axvline(x=args.switch_ep, color="r", linestyle="--", alpha=0.7, label="Switch")
+    ax1.axvline(x=args.switch_ep, color="r", linestyle="--", alpha=0.7, label="Wind Start")
     ax1.set_ylabel("Reward")
     ax1.legend(loc="upper left")
     ax1.grid(True, alpha=0.3)
@@ -509,7 +506,6 @@ def train(args):
     ax3_lr.set_ylabel("Actor LR", color=color_lr)
     ax3_lr.tick_params(axis="y", labelcolor=color_lr)
 
-    # Combined legend for subplot 3
     lines3a, labels3a = ax3.get_legend_handles_labels()
     lines3b, labels3b = ax3_lr.get_legend_handles_labels()
     ax3.legend(lines3a + lines3b, labels3a + labels3b, loc="upper left")
@@ -517,27 +513,27 @@ def train(args):
     ax3.set_xlabel("Episode")
     fig.tight_layout()
 
-    png_path = os.path.join(out_dir, "plot.png")
+    out_dir = f"icarussecondpaper/runs/{args.seed}_flagship" if args.seed is not None else "cartpole/runs/noseed_flagship"
+    os.makedirs(out_dir, exist_ok=True)
+
+    png_path = os.path.join(out_dir, f"{args.seed}_flagship.png")
     fig.savefig(png_path, dpi=150, bbox_inches="tight")
 
-    csv_path = os.path.join(out_dir, "data.csv")
+    csv_path = os.path.join(out_dir, f"{args.seed}_flagship.csv")
     with open(csv_path, "w") as fh:
-        fh.write("episode,reward,unexpected,expected,variance,td2,delta_var,actor_lr,abs_td\n")
-        for i, (r, u, e, v, t2, dv, alr, td) in enumerate(zip(
-                reward_history, unexpected_history, expected_history,
-                variance_history, td2_history, delta_var_history,
-                actor_lr_history, td_history)):
-            fh.write(f"{i},{r},{u},{e},{v},{t2},{dv},{alr},{td}\n")
+        fh.write("episode,reward,unexpected_uncertainty,expected_uncertainty,mean_variance,mean_td_error_sq,mean_delta_var,mean_actor_lr,mean_abs_td\n")
+        for i, (r, u, e, v, td2, dv, alr, td) in enumerate(zip(reward_history, unexpected_history, expected_history, variance_history, td2_history, delta_var_history, actor_lr_history, td_history)):
+            fh.write(f"{i},{r},{u},{e},{v},{td2},{dv},{alr},{td}\n")
 
-    print(f"\nPlot: '{png_path}'  CSV: '{csv_path}'")
+    print(f"\nPlot saved as '{png_path}' and CSV saved as '{csv_path}'")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=TOTAL_EPISODES)
-    parser.add_argument("--switch_ep", type=int, default=SWITCH_EP)
+    parser.add_argument("--episodes", type=int, default=10000)
+    parser.add_argument("--switch_ep", type=int, default=1)
     parser.add_argument("--render", action="store_true")
-    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
     parser.add_argument("--base_noise", type=float, default=BASE_NOISE)
     parser.add_argument("--ne_max", type=float, default=NE_MAX)
@@ -550,4 +546,5 @@ if __name__ == "__main__":
     parser.add_argument("--td_fast_alpha", type=float, default=TD_FAST_ALPHA)
     parser.add_argument("--td_slow_alpha", type=float, default=TD_SLOW_ALPHA)
     args = parser.parse_args()
+
     train(args)

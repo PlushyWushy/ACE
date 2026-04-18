@@ -248,17 +248,16 @@ class ModulatedActor(nn.Module):
 # 4. Joint-switch helper
 # ---------------------------------------------------------------------------
 def swap_link_params(env):
-    """Swap the physical link parameters of the Acrobot so that the torque
-    that previously acted on joint 2 now effectively acts on joint 1."""
+    """Halve the upper link and add the removed length to the lower link.
+    Default: L1=1.0, L2=1.0  →  After: L1=0.5, L2=1.5
+    This fundamentally changes the swing-up dynamics."""
     uw = env.unwrapped
-    # Swap lengths
-    uw.LINK_LENGTH_1, uw.LINK_LENGTH_2 = uw.LINK_LENGTH_2, uw.LINK_LENGTH_1
-    # Swap masses
-    uw.LINK_MASS_1, uw.LINK_MASS_2 = uw.LINK_MASS_2, uw.LINK_MASS_1
-    # Swap center-of-mass positions
-    uw.LINK_COM_POS_1, uw.LINK_COM_POS_2 = uw.LINK_COM_POS_2, uw.LINK_COM_POS_1
-    # Swap moments of inertia
-    uw.LINK_MOI = uw.LINK_MOI  # MOI is a single scalar in standard Acrobot; keep as-is
+    half = uw.LINK_LENGTH_1 / 2.0
+    uw.LINK_LENGTH_2 += half
+    uw.LINK_LENGTH_1 = half
+    # Shift COM proportionally
+    uw.LINK_COM_POS_1 = uw.LINK_LENGTH_1 / 2.0
+    uw.LINK_COM_POS_2 = uw.LINK_LENGTH_2 / 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +317,7 @@ def train(args):
         if ep == args.switch_ep and not switched:
             swap_link_params(env)
             switched = True
-            print(f">>> SWITCH at episode {ep}: link params swapped <<<")
+            print(f">>> SWITCH at episode {ep}: link lengths changed (L1 halved, L2 extended) <<<")
 
         if args.seed is not None:
             try:
@@ -459,44 +458,64 @@ def train(args):
             )
 
     # -----------------------------------------------------------------------
-    # Plot
+    # Plot (3 separate subplots for readability)
     # -----------------------------------------------------------------------
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-    ax1.plot(range(len(reward_history)), reward_history,
-             color="tab:blue", linewidth=1, alpha=0.6, label="Reward")
+    out_dir = (f"acrobot/runs/{args.seed}_flagship" if args.seed is not None
+               else "acrobot/runs/noseed_flagship")
+    os.makedirs(out_dir, exist_ok=True)
+
+    episodes_x = range(len(reward_history))
     window_size = 20
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
+    fig.suptitle("Switch Acrobot — Icarus (Decoupled Uncertainty)", fontsize=14)
+
+    # --- Subplot 1: Reward ---
+    ax1.plot(episodes_x, reward_history,
+             color="tab:blue", linewidth=0.8, alpha=0.5, label="Reward")
     if len(reward_history) >= window_size:
         rolling = np.convolve(reward_history,
                               np.ones(window_size) / window_size, mode="valid")
         ax1.plot(range(window_size - 1, len(reward_history)), rolling,
                  color="tab:blue", linewidth=2, label=f"{window_size}-ep Avg")
-    ax1.axvline(x=args.switch_ep, color="r", linestyle="--", label="Switch")
-    ax1.set_xlabel("Episode")
-    ax1.set_ylabel("Reward", color="tab:blue")
-    ax1.tick_params(axis="y", labelcolor="tab:blue")
-
-    ax2 = ax1.twinx()
-    ax2.plot(range(len(unexpected_history)), unexpected_history,
-             color="tab:orange", linewidth=1.5, alpha=0.7, label="Unexpected")
-    ax2.plot(range(len(expected_history)), expected_history,
-             color="tab:green", linewidth=1.5, alpha=0.7, label="Expected")
-    ax2.plot(range(len(variance_history)), variance_history,
-             color="tab:purple", linewidth=1.2, alpha=0.6, label="Variance")
-    ax2.plot(range(len(actor_lr_history)), actor_lr_history,
-             color="tab:gray", linewidth=1.0, alpha=0.6, label="Actor LR")
-    ax2.set_ylabel("Uncertainty / Variance", color="tab:orange")
-    ax2.tick_params(axis="y", labelcolor="tab:orange")
-
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left")
+    ax1.axvline(x=args.switch_ep, color="r", linestyle="--", alpha=0.7, label="Switch")
+    ax1.set_ylabel("Reward")
+    ax1.legend(loc="upper left")
     ax1.grid(True, alpha=0.3)
-    fig.tight_layout()
-    plt.title("Switch Acrobot - Icarus (Decoupled Uncertainty)")
 
-    out_dir = (f"acrobot/runs/{args.seed}_flagship" if args.seed is not None
-               else "acrobot/runs/noseed_flagship")
-    os.makedirs(out_dir, exist_ok=True)
+    # --- Subplot 2: Unexpected & Expected Uncertainty ---
+    ax2.plot(episodes_x, unexpected_history,
+             color="tab:orange", linewidth=1.5, alpha=0.8, label="Unexpected (Novelty)")
+    ax2.plot(episodes_x, expected_history,
+             color="tab:green", linewidth=1.5, alpha=0.8, label="Expected (Variance)")
+    ax2.axvline(x=args.switch_ep, color="r", linestyle="--", alpha=0.7)
+    ax2.set_ylabel("Uncertainty")
+    ax2.legend(loc="upper left")
+    ax2.grid(True, alpha=0.3)
+
+    # --- Subplot 3: Critic Variance & Actor LR ---
+    color_var = "tab:purple"
+    ax3.plot(episodes_x, variance_history,
+             color=color_var, linewidth=1.2, alpha=0.8, label="Critic Variance (Mean)")
+    ax3.set_ylabel("Variance", color=color_var)
+    ax3.tick_params(axis="y", labelcolor=color_var)
+    ax3.axvline(x=args.switch_ep, color="r", linestyle="--", alpha=0.7)
+    ax3.grid(True, alpha=0.3)
+
+    ax3_lr = ax3.twinx()
+    color_lr = "tab:gray"
+    ax3_lr.plot(episodes_x, actor_lr_history,
+                color=color_lr, linewidth=1.2, alpha=0.8, label="Actor LR (Mean)")
+    ax3_lr.set_ylabel("Actor LR", color=color_lr)
+    ax3_lr.tick_params(axis="y", labelcolor=color_lr)
+
+    # Combined legend for subplot 3
+    lines3a, labels3a = ax3.get_legend_handles_labels()
+    lines3b, labels3b = ax3_lr.get_legend_handles_labels()
+    ax3.legend(lines3a + lines3b, labels3a + labels3b, loc="upper left")
+
+    ax3.set_xlabel("Episode")
+    fig.tight_layout()
 
     png_path = os.path.join(out_dir, "plot.png")
     fig.savefig(png_path, dpi=150, bbox_inches="tight")

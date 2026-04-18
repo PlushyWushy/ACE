@@ -804,7 +804,7 @@ if __name__ == "__main__":
     use_ne_noise = True
     use_switch_lr_spike = True
     switch_at = 1000          # episode at which thruster swap occurs
-    switch_lr_delay_eps = 7  # delay spike by 30 episodes after the switch
+    switch_lr_delay_eps = 30  # delay spike by 30 episodes after the switch
     switch_lr_peak = 0.001    # peak actor LR at the switch
     switch_lr_hold_eps = 1    # episodes to hold peak before annealing
     switch_lr_anneal_eps = 50 # episodes to linearly anneal back to base

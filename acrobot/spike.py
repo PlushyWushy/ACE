@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Switch Acrobot with decoupled uncertainty (Icarus variant):
-- NE (Noradrenaline) driven by *unexpected* uncertainty (fast-slow TD novelty)
-- ACh (Acetylcholine) driven by *expected* uncertainty (critic's variance estimate)
+Switch Acrobot with a fixed LR schedule that spikes at the switch point:
+- Before the switch: constant base actor LR.
+- At the switch: LR jumps to SWITCH_LR_PEAK.
+- Holds at peak for SWITCH_LR_HOLD_EPS episodes.
+- Linearly anneals back to base LR over SWITCH_LR_ANNEAL_EPS episodes.
 
-ACh is used directly as actor LR (with BASE_LR as the floor).
+No neuromodulation (NE/ACh) drives the actor LR — it's entirely
+schedule-driven.  This serves as the "engineered upper-bound" baseline
+for the Icarus neuromodulated variant.
 
 At the switch point the physical link parameters are swapped, so the
-torque that was being applied to the "elbow" joint now effectively acts
-on the "shoulder" joint, creating a structural surprise.
+torque that was applied to the "elbow" joint now effectively acts on the
+"shoulder" joint.
 """
 
 import argparse
@@ -37,45 +41,28 @@ TAU_M = 0.02
 ACTOR_THETA = 2.0
 GAMMA = 0.99
 
-# --- NEUROMODULATION PARAMETERS ---
-BASE_LR = 0.05
-BASE_NOISE = 0.5
+# --- FIXED BASE LR ---
+BASE_LR = 0.001
+BASE_NOISE = 2
 
-# NE logistic mapping params (unexpected uncertainty / novelty)
-NE_MAX = 3
-NE_K = 0.2
-NE_CENTER = 15000
+# --- SPIKE SCHEDULE PARAMS ---
+SWITCH_LR_PEAK = 0.1        # Peak LR right at the switch
+SWITCH_LR_HOLD_EPS = 1       # Episodes to hold peak before annealing
+SWITCH_LR_ANNEAL_EPS = 200   # Episodes to linearly anneal back to BASE_LR
 
-# ACh logistic mapping params (expected uncertainty / variance)
-ACH_MAX = 1
-ACH_K = 10
-ACH_CENTER = 5
-
-# Surprise EMA
-EXP_SURPRISE_DECAY = 0.01
-UNEXP_SURPRISE_DECAY = 0.8
-
-# Variance weighting of surprise signal
-SURPRISE_VARIANCE_WEIGHT = 0
-SURPRISE_EPS = 1e-3
-
-# ---------------------------------------------------------------------------
-# Fast-slow TD novelty (unexpected uncertainty)
-# ---------------------------------------------------------------------------
-TD_SIGNAL_CLIP = 20.0
-TD_FAST_ALPHA = 0.097663   # ~20-step timescale
-TD_SLOW_ALPHA = 0.003642   # ~1000-step timescale
-TD_NOVELTY_MARGIN = 0.0
-
-# ---------------------------------------------------------------------------
-# Actor / Critic LR params
-# ---------------------------------------------------------------------------
+# --- CRITIC ---
 CRITIC_BASE_LR = 0.001
 VAR_DECAY = 0
-ACTOR_LR_DECAY = 0
-ACTOR_LR_BOOST = 0
-ACTOR_LR_MIN = 0.05
-ACTOR_LR_MAX = 0.05
+
+# --- SURPRISE TRACKING (still tracked for logging, not used for LR) ---
+EXP_SURPRISE_DECAY = 0.01
+UNEXP_SURPRISE_DECAY = 0.8
+SURPRISE_VARIANCE_WEIGHT = 0
+SURPRISE_EPS = 1e-3
+TD_SIGNAL_CLIP = 20.0
+TD_FAST_ALPHA = 0.097663
+TD_SLOW_ALPHA = 0.003642
+TD_NOVELTY_MARGIN = 0.0
 
 # ---------------------------------------------------------------------------
 # Environment / experiment params
@@ -117,6 +104,34 @@ def logistic_drive(max_val: float, k: float, center: float,
 
 
 # ---------------------------------------------------------------------------
+# Fixed LR spike schedule
+# ---------------------------------------------------------------------------
+def spike_lr(ep: int, switch_ep: int, base_lr: float, peak_lr: float,
+             hold_eps: int, anneal_eps: int) -> float:
+    """Return the actor LR for the given episode under the spike schedule.
+    Spikes at ep=0 (initial learning) and at switch_ep."""
+    # 1) Initial spike at episode 0
+    if ep < anneal_eps:
+        frac = 1.0 - (ep / float(anneal_eps))
+        return base_lr + (peak_lr - base_lr) * frac
+        
+    # 2) Before the switch
+    if ep < switch_ep:
+        return base_lr
+        
+    # 3) Switch spike
+    t = ep - switch_ep
+    if t < hold_eps:
+        return peak_lr
+    ta = t - hold_eps
+    if ta < anneal_eps:
+        frac = 1.0 - (ta / float(anneal_eps))
+        return base_lr + (peak_lr - base_lr) * frac
+        
+    return base_lr
+
+
+# ---------------------------------------------------------------------------
 # 1. Place Cell Encoder  (6-D for Acrobot)
 # ---------------------------------------------------------------------------
 class PlaceCellEncoder(nn.Module):
@@ -134,7 +149,6 @@ class PlaceCellEncoder(nn.Module):
         self.device = device
         gs = grid_sizes or PC_GRID_SIZES
 
-        # Observation ranges
         lows  = [-1.0, -1.0, -1.0, -1.0, -4*math.pi, -9*math.pi]
         highs = [ 1.0,  1.0,  1.0,  1.0,  4*math.pi,  9*math.pi]
 
@@ -146,7 +160,6 @@ class PlaceCellEncoder(nn.Module):
         centers = torch.stack([x.flatten() for x in mesh], dim=1)
         self.register_buffer("centers", centers)
 
-        # Sigma = spacing / 1.5  (same heuristic as CartPole)
         sigma_list = []
         for ls in linspaces:
             if len(ls) > 1:
@@ -255,7 +268,6 @@ def swap_link_params(env):
     half = uw.LINK_LENGTH_1 / 2.0
     uw.LINK_LENGTH_2 += half
     uw.LINK_LENGTH_1 = half
-    # Shift COM proportionally
     uw.LINK_COM_POS_1 = uw.LINK_LENGTH_1 / 2.0
     uw.LINK_COM_POS_2 = uw.LINK_LENGTH_2 / 2.0
 
@@ -290,10 +302,12 @@ def train(args):
     actor = ModulatedActor(encoder.n_neurons, n_actions=3, device=device)
     critic = LocalCritic(encoder.n_neurons, device)
 
-    print(f"Acrobot Icarus | Episodes: {args.episodes} | Switch at: {args.switch_ep}")
+    print(f"Acrobot Spike | Episodes: {args.episodes} | Switch at: {args.switch_ep}")
+    print(f"LR schedule: base={args.base_lr}, peak={args.switch_lr_peak}, "
+          f"hold={args.switch_lr_hold_eps}, anneal={args.switch_lr_anneal_eps}")
     print(f"Place-cell neurons: {encoder.n_neurons}")
 
-    # Traces
+    # Surprise traces (tracked for logging, not used for LR)
     td_fast = 0.0
     td_slow = 0.0
     td_trace_inited = False
@@ -304,12 +318,9 @@ def train(args):
     unexpected_history = []
     expected_history = []
     variance_history = []
-    td2_history = []
-    delta_var_history = []
     actor_lr_history = []
     td_history = []
 
-    actor_lr_state = args.base_lr
     switched = False
 
     for ep in range(args.episodes):
@@ -338,26 +349,19 @@ def train(args):
         done = False
         total_reward = 0.0
 
-        # Neuromodulation
-        current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER,
-                                    avg_unexpected, args.base_noise)
-        current_ne = min(current_ne, 5.0)
-        current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER,
-                                     avg_expected, args.base_lr)
+        # Fixed LR from spike schedule
+        actor_lr = spike_lr(ep, args.switch_ep, args.base_lr,
+                            args.switch_lr_peak, args.switch_lr_hold_eps,
+                            args.switch_lr_anneal_eps)
 
         td_sum = 0.0
         td_count = 0
         var_sum = 0.0
         var_count = 0
-        td2_sum = 0.0
-        delta_var_sum = 0.0
-        actor_lr_sum = 0.0
-        actor_lr_count = 0
-        last_td_signal = 0.0
 
         while not done:
             spikes = encoder(obs_t)
-            action_code, act_spikes = actor(spikes, noise_scale=current_ne)
+            action_code, act_spikes = actor(spikes, noise_scale=args.base_noise)
 
             next_obs, reward, terminated, truncated, _ = env.step(action_code)
             done = terminated or truncated
@@ -379,34 +383,18 @@ def train(args):
             td_error_val = float(td_error.item())
             td_sum += abs(td_error_val)
             td_count += 1
-            td_error_sq = td_error_val ** 2
-            var_val = float(var_curr.item())
-            err_var_val = abs(td_error_val) - var_val
-            td2_sum += td_error_sq
 
-            critic_lr = args.critic_base_lr
-            critic.update(spikes, td_error, var_curr, lr=critic_lr)
-            delta_var_val = critic_lr * abs(err_var_val) * err_var_val
-            delta_var_sum += delta_var_val
+            critic.update(spikes, td_error, var_curr, lr=args.critic_base_lr)
 
-            # Actor LR via ACh
-            actor_lr_state *= (1.0 - args.actor_lr_decay)
-            actor_lr_state += args.actor_lr_boost * current_ach
-            actor_lr_state = min(max(actor_lr_state, args.actor_lr_min),
-                                 args.actor_lr_max)
-            actor_lr = actor_lr_state
-            actor_lr_sum += actor_lr
-            actor_lr_count += 1
-
+            # Actor update with the fixed schedule LR
             actor.update(td_error_val, act_spikes, current_lr=actor_lr)
 
-            # Expected uncertainty (EMA of critic variance)
+            # Track surprise signals (for logging / comparison only)
             current_sigma = torch.sqrt(var_curr.detach()).item()
             current_sigma = max(current_sigma, SURPRISE_EPS)
             avg_expected = ((1.0 - EXP_SURPRISE_DECAY) * avg_expected
                             + EXP_SURPRISE_DECAY * current_sigma)
 
-            # Unexpected uncertainty (fast-slow TD novelty)
             td_signal = abs(td_error_val) / (current_sigma ** SURPRISE_VARIANCE_WEIGHT)
             td_signal = float(min(max(td_signal, 0.0), TD_SIGNAL_CLIP))
 
@@ -415,60 +403,47 @@ def train(args):
                 td_slow = td_signal
                 td_trace_inited = True
             else:
-                td_fast = ((1.0 - args.td_fast_alpha) * td_fast
-                           + args.td_fast_alpha * td_signal)
-                td_slow = ((1.0 - args.td_slow_alpha) * td_slow
-                           + args.td_slow_alpha * td_signal)
+                td_fast = ((1.0 - TD_FAST_ALPHA) * td_fast
+                           + TD_FAST_ALPHA * td_signal)
+                td_slow = ((1.0 - TD_SLOW_ALPHA) * td_slow
+                           + TD_SLOW_ALPHA * td_signal)
 
             td_novelty = max(0.0, td_fast - td_slow - TD_NOVELTY_MARGIN)
             avg_unexpected = UNEXP_SURPRISE_DECAY * avg_unexpected + td_novelty
 
-            current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER,
-                                        avg_unexpected, args.base_noise)
-            current_ne = min(current_ne, 5.0)
-            current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER,
-                                         avg_expected, args.base_lr)
-
             obs_t = next_obs_t
             total_reward += float(reward)
-            last_td_signal = td_signal
 
         reward_history.append(total_reward)
         unexpected_history.append(avg_unexpected)
         expected_history.append(avg_expected)
         mean_abs_td = (td_sum / td_count) if td_count > 0 else 0.0
         mean_var = (var_sum / var_count) if var_count > 0 else 0.0
-        mean_td2 = (td2_sum / td_count) if td_count > 0 else 0.0
-        mean_delta_var = (delta_var_sum / td_count) if td_count > 0 else 0.0
-        mean_actor_lr = (actor_lr_sum / actor_lr_count) if actor_lr_count > 0 else 0.0
         td_history.append(mean_abs_td)
         variance_history.append(mean_var)
-        td2_history.append(mean_td2)
-        delta_var_history.append(mean_delta_var)
-        actor_lr_history.append(mean_actor_lr)
+        actor_lr_history.append(actor_lr)
         avg_r = float(np.mean(reward_history[-20:])) if len(reward_history) > 0 else 0.0
 
         if ep % 100 == 0:
             status = "NORMAL" if not switched or ep < args.switch_ep else "SWITCHED"
             print(
                 f"Ep {ep:5d} | {status:8s} | R: {total_reward:7.1f} | "
-                f"Avg20: {avg_r:7.1f} | NE: {current_ne:.2f} | "
-                f"ACh: {current_ach:.4f} | LR: {mean_actor_lr:.6f} | "
+                f"Avg20: {avg_r:7.1f} | LR: {actor_lr:.6f} | "
                 f"Unexpected: {avg_unexpected:.2f} | Expected: {avg_expected:.2f}"
             )
 
     # -----------------------------------------------------------------------
-    # Plot (3 separate subplots for readability)
+    # Plot (3 separate subplots)
     # -----------------------------------------------------------------------
-    out_dir = (f"acrobot/runs/{args.seed}_flagship" if args.seed is not None
-               else "acrobot/runs/noseed_flagship")
+    out_dir = (f"acrobot/runs/{args.seed}_spike" if args.seed is not None
+               else "acrobot/runs/noseed_spike")
     os.makedirs(out_dir, exist_ok=True)
 
     episodes_x = range(len(reward_history))
     window_size = 20
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
-    fig.suptitle("Switch Acrobot — Icarus (Decoupled Uncertainty)", fontsize=14)
+    fig.suptitle("Switch Acrobot — Spike (Fixed LR Schedule)", fontsize=14)
 
     # --- Subplot 1: Reward ---
     ax1.plot(episodes_x, reward_history,
@@ -503,13 +478,12 @@ def train(args):
     ax3.grid(True, alpha=0.3)
 
     ax3_lr = ax3.twinx()
-    color_lr = "tab:gray"
+    color_lr = "tab:red"
     ax3_lr.plot(episodes_x, actor_lr_history,
-                color=color_lr, linewidth=1.2, alpha=0.8, label="Actor LR (Mean)")
+                color=color_lr, linewidth=1.5, alpha=0.8, label="Actor LR (Spike)")
     ax3_lr.set_ylabel("Actor LR", color=color_lr)
     ax3_lr.tick_params(axis="y", labelcolor=color_lr)
 
-    # Combined legend for subplot 3
     lines3a, labels3a = ax3.get_legend_handles_labels()
     lines3b, labels3b = ax3_lr.get_legend_handles_labels()
     ax3.legend(lines3a + lines3b, labels3a + labels3b, loc="upper left")
@@ -522,12 +496,11 @@ def train(args):
 
     csv_path = os.path.join(out_dir, "data.csv")
     with open(csv_path, "w") as fh:
-        fh.write("episode,reward,unexpected,expected,variance,td2,delta_var,actor_lr,abs_td\n")
-        for i, (r, u, e, v, t2, dv, alr, td) in enumerate(zip(
+        fh.write("episode,reward,unexpected,expected,variance,actor_lr,abs_td\n")
+        for i, (r, u, e, v, alr, td) in enumerate(zip(
                 reward_history, unexpected_history, expected_history,
-                variance_history, td2_history, delta_var_history,
-                actor_lr_history, td_history)):
-            fh.write(f"{i},{r},{u},{e},{v},{t2},{dv},{alr},{td}\n")
+                variance_history, actor_lr_history, td_history)):
+            fh.write(f"{i},{r},{u},{e},{v},{alr},{td}\n")
 
     print(f"\nPlot: '{png_path}'  CSV: '{csv_path}'")
 
@@ -540,14 +513,9 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
     parser.add_argument("--base_noise", type=float, default=BASE_NOISE)
-    parser.add_argument("--ne_max", type=float, default=NE_MAX)
-    parser.add_argument("--ach_max", type=float, default=ACH_MAX)
     parser.add_argument("--critic_base_lr", type=float, default=CRITIC_BASE_LR)
-    parser.add_argument("--actor_lr_decay", type=float, default=ACTOR_LR_DECAY)
-    parser.add_argument("--actor_lr_boost", type=float, default=ACTOR_LR_BOOST)
-    parser.add_argument("--actor_lr_min", type=float, default=ACTOR_LR_MIN)
-    parser.add_argument("--actor_lr_max", type=float, default=ACTOR_LR_MAX)
-    parser.add_argument("--td_fast_alpha", type=float, default=TD_FAST_ALPHA)
-    parser.add_argument("--td_slow_alpha", type=float, default=TD_SLOW_ALPHA)
+    parser.add_argument("--switch_lr_peak", type=float, default=SWITCH_LR_PEAK)
+    parser.add_argument("--switch_lr_hold_eps", type=int, default=SWITCH_LR_HOLD_EPS)
+    parser.add_argument("--switch_lr_anneal_eps", type=int, default=SWITCH_LR_ANNEAL_EPS)
     args = parser.parse_args()
     train(args)

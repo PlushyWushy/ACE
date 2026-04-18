@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-Switch Acrobot with decoupled uncertainty (Icarus variant):
+Switch Acrobot with Sine Wave LR (Baseline variant):
 - NE (Noradrenaline) driven by *unexpected* uncertainty (fast-slow TD novelty)
-- ACh (Acetylcholine) driven by *expected* uncertainty (critic's variance estimate)
+- Expected uncertainty is tracked for plotting but NOT used for Actor LR.
 
-ACh is used directly as actor LR (with BASE_LR as the floor).
+Actor LR follows a sine wave:
+- Min: 0.0001
+- Max: 0.02
+- Adjustable frequency (periods per episode).
 
 At the switch point the physical link parameters are swapped, so the
 torque that was being applied to the "elbow" joint now effectively acts
@@ -38,8 +41,8 @@ ACTOR_THETA = 2.0
 GAMMA = 0.99
 
 # --- NEUROMODULATION PARAMETERS ---
-BASE_LR = 0.05
-BASE_NOISE = 0.5
+BASE_LR = 0.000055
+BASE_NOISE = 1.8
 
 # NE logistic mapping params (unexpected uncertainty / novelty)
 NE_MAX = 3
@@ -72,10 +75,11 @@ TD_NOVELTY_MARGIN = 0.0
 # ---------------------------------------------------------------------------
 CRITIC_BASE_LR = 0.001
 VAR_DECAY = 0
-ACTOR_LR_DECAY = 0
-ACTOR_LR_BOOST = 0
-ACTOR_LR_MIN = 0.05
-ACTOR_LR_MAX = 0.05
+
+# --- SINE WAVE LR PARAMS ---
+SINE_LR_MIN = 0.0001
+SINE_LR_MAX = 0.1
+SINE_PERIODS_PER_EP = 3
 
 # ---------------------------------------------------------------------------
 # Environment / experiment params
@@ -120,15 +124,7 @@ def logistic_drive(max_val: float, k: float, center: float,
 # 1. Place Cell Encoder  (6-D for Acrobot)
 # ---------------------------------------------------------------------------
 class PlaceCellEncoder(nn.Module):
-    """Radial-basis / place-cell encoder for Acrobot's 6-D observation.
-
-    Observation layout:
-        [cos(θ1), sin(θ1), cos(θ2), sin(θ2), ω1, ω2]
-    Ranges:
-        cos/sin: [-1, 1]
-        ω1: [-4π, 4π] ≈ [-12.57, 12.57]
-        ω2: [-9π, 9π] ≈ [-28.27, 28.27]
-    """
+    """Radial-basis / place-cell encoder for Acrobot's 6-D observation."""
     def __init__(self, device: torch.device, grid_sizes=None):
         super().__init__()
         self.device = device
@@ -290,7 +286,7 @@ def train(args):
     actor = ModulatedActor(encoder.n_neurons, n_actions=3, device=device)
     critic = LocalCritic(encoder.n_neurons, device)
 
-    print(f"Acrobot Icarus | Episodes: {args.episodes} | Switch at: {args.switch_ep}")
+    print(f"Acrobot Sine Baseline | Episodes: {args.episodes} | Switch at: {args.switch_ep}")
     print(f"Place-cell neurons: {encoder.n_neurons}")
 
     # Traces
@@ -309,7 +305,6 @@ def train(args):
     actor_lr_history = []
     td_history = []
 
-    actor_lr_state = args.base_lr
     switched = False
 
     for ep in range(args.episodes):
@@ -342,8 +337,6 @@ def train(args):
         current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER,
                                     avg_unexpected, args.base_noise)
         current_ne = min(current_ne, 5.0)
-        current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER,
-                                     avg_expected, args.base_lr)
 
         td_sum = 0.0
         td_count = 0
@@ -354,6 +347,8 @@ def train(args):
         actor_lr_sum = 0.0
         actor_lr_count = 0
         last_td_signal = 0.0
+        
+        step_in_ep = 0
 
         while not done:
             spikes = encoder(obs_t)
@@ -389,12 +384,11 @@ def train(args):
             delta_var_val = critic_lr * abs(err_var_val) * err_var_val
             delta_var_sum += delta_var_val
 
-            # Actor LR via ACh
-            actor_lr_state *= (1.0 - args.actor_lr_decay)
-            actor_lr_state += args.actor_lr_boost * current_ach
-            actor_lr_state = min(max(actor_lr_state, args.actor_lr_min),
-                                 args.actor_lr_max)
-            actor_lr = actor_lr_state
+            # Actor LR via Sine Wave (per fractional episode step)
+            fractional_ep = ep + (step_in_ep / 500.0)
+            sine_val = math.sin(2 * math.pi * fractional_ep * args.sine_periods_per_ep)
+            actor_lr = args.sine_lr_min + (args.sine_lr_max - args.sine_lr_min) * 0.5 * (1.0 + sine_val)
+
             actor_lr_sum += actor_lr
             actor_lr_count += 1
 
@@ -426,12 +420,11 @@ def train(args):
             current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER,
                                         avg_unexpected, args.base_noise)
             current_ne = min(current_ne, 5.0)
-            current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER,
-                                         avg_expected, args.base_lr)
 
             obs_t = next_obs_t
             total_reward += float(reward)
             last_td_signal = td_signal
+            step_in_ep += 1
 
         reward_history.append(total_reward)
         unexpected_history.append(avg_unexpected)
@@ -453,22 +446,22 @@ def train(args):
             print(
                 f"Ep {ep:5d} | {status:8s} | R: {total_reward:7.1f} | "
                 f"Avg20: {avg_r:7.1f} | NE: {current_ne:.2f} | "
-                f"ACh: {current_ach:.4f} | LR: {mean_actor_lr:.6f} | "
+                f"LR: {mean_actor_lr:.6f} | "
                 f"Unexpected: {avg_unexpected:.2f} | Expected: {avg_expected:.2f}"
             )
 
     # -----------------------------------------------------------------------
     # Plot (3 separate subplots for readability)
     # -----------------------------------------------------------------------
-    out_dir = (f"acrobot/runs/{args.seed}_flagship" if args.seed is not None
-               else "acrobot/runs/noseed_flagship")
+    out_dir = (f"acrobot/runs/{args.seed}_sine" if args.seed is not None
+               else "acrobot/runs/noseed_sine")
     os.makedirs(out_dir, exist_ok=True)
 
     episodes_x = range(len(reward_history))
     window_size = 20
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 12), sharex=True)
-    fig.suptitle("Switch Acrobot — Icarus (Decoupled Uncertainty)", fontsize=14)
+    fig.suptitle("Switch Acrobot — Sine Wave LR Baseline", fontsize=14)
 
     # --- Subplot 1: Reward ---
     ax1.plot(episodes_x, reward_history,
@@ -543,10 +536,9 @@ if __name__ == "__main__":
     parser.add_argument("--ne_max", type=float, default=NE_MAX)
     parser.add_argument("--ach_max", type=float, default=ACH_MAX)
     parser.add_argument("--critic_base_lr", type=float, default=CRITIC_BASE_LR)
-    parser.add_argument("--actor_lr_decay", type=float, default=ACTOR_LR_DECAY)
-    parser.add_argument("--actor_lr_boost", type=float, default=ACTOR_LR_BOOST)
-    parser.add_argument("--actor_lr_min", type=float, default=ACTOR_LR_MIN)
-    parser.add_argument("--actor_lr_max", type=float, default=ACTOR_LR_MAX)
+    parser.add_argument("--sine_lr_min", type=float, default=SINE_LR_MIN)
+    parser.add_argument("--sine_lr_max", type=float, default=SINE_LR_MAX)
+    parser.add_argument("--sine_periods_per_ep", type=float, default=SINE_PERIODS_PER_EP)
     parser.add_argument("--td_fast_alpha", type=float, default=TD_FAST_ALPHA)
     parser.add_argument("--td_slow_alpha", type=float, default=TD_SLOW_ALPHA)
     args = parser.parse_args()
