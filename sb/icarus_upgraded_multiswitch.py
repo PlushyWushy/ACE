@@ -59,7 +59,12 @@ CRITIC_ACH_MIN_SCALE = 0.1
 CRITIC_ACH_MAX_SCALE = 1.0
 
 NUM_SWITCHES = 3  # Number of random environment switches
-N_ARMS = 2        # Number of bandit arms
+N_ARMS = 4        # Number of bandit arms
+
+# --- DETERMINISTIC SWITCH SCHEDULE ---
+# Episodes where the optimal arm changes. 
+# The arm sequence will cycle through arms (e.g., 0 -> 1 -> 2 -> ... -> 0...).
+SWITCH_SCHEDULE = [5000, 10000, 15000]
 
 
 def set_global_seed(seed: int | None):
@@ -144,20 +149,15 @@ def logistic_drive(max_val: float, k: float, center: float, signal: float, base:
     return max_val / (1.0 + math.exp(-z)) + base
 
 
-def _generate_switch_points(episodes: int, num_switches: int, n_arms: int = 2) -> Tuple[list, list]:
-    """Generate sorted random switch points and the optimal arm at each switch.
-    Each switch picks a different arm from the current one.
-    Returns (switch_episodes, optimal_arm_sequence) where optimal_arm_sequence[i]
-    is the new optimal arm starting at switch_episodes[i].
+def _get_deterministic_switches(n_arms: int) -> Tuple[list, list]:
+    """Use the global SWITCH_SCHEDULE and generate a deterministic arm sequence.
+    Sequence: 0 -> 1 -> 2 -> ... -> (N_ARMS-1) -> 0 ...
     """
-    margin = max(int(episodes * 0.05), 1)
-    points = sorted(random.sample(range(margin, episodes - margin), num_switches))
-    # Generate the sequence of optimal arms (each different from the previous)
+    points = sorted(SWITCH_SCHEDULE)
     arm_sequence = []
-    current_arm = 0  # starts optimal on arm 0
+    current_arm = 0
     for _ in points:
-        other_arms = [a for a in range(n_arms) if a != current_arm]
-        current_arm = random.choice(other_arms)
+        current_arm = (current_arm + 1) % n_arms
         arm_sequence.append(current_arm)
     return points, arm_sequence
 
@@ -166,8 +166,8 @@ def train(episodes: int = 10000, seed: int | None = SEED, num_switches: int = NU
     set_global_seed(seed)
     device = torch.device("cpu")
 
-    # Generate random switch points and arm sequence
-    switch_points, arm_sequence = _generate_switch_points(episodes, num_switches, n_arms)
+    # Use deterministic switch points and arm sequence
+    switch_points, arm_sequence = _get_deterministic_switches(n_arms)
     switch_points_saved = list(switch_points)  # save a copy before the loop consumes it
     arm_sequence_saved = list(arm_sequence)
 
@@ -212,7 +212,7 @@ def train(episodes: int = 10000, seed: int | None = SEED, num_switches: int = NU
     quiet = kwargs.get('quiet', False)
 
     if not quiet:
-        print(f"Arms: {n_arms} | Random switch points: {switch_points_saved}")
+        print(f"Arms: {n_arms} | Switch points: {switch_points_saved}")
         print(f"Arm sequence: [0] -> {' -> '.join(f'[{a}]' for a in arm_sequence_saved)}")
 
     actor = SNNActor(device, n_arms=n_arms)

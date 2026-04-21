@@ -304,7 +304,7 @@ def train(args):
         done = False
         total_reward = 0.0
 
-        inverted = (ep > 15000)
+        inverted = (ep > 5000)
 
         # =====================================================================
         # DECOUPLED NEUROMODULATION
@@ -503,7 +503,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=15000)
+    parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
