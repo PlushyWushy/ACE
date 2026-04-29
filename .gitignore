@@ -28,10 +28,7 @@ env.bak/
 venv.bak/
 
 # Experiment Results & Data
-*.png
-*.csv
 
-vis_runs/
 
 # Jupyter Notebook
 .ipynb_checkpoints

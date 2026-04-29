@@ -1,0 +1,2 @@
+episode,reward,unexpected_uncertainty,expected_uncertainty,mean_variance,mean_td_error_sq,mean_delta_var,mean_actor_lr,mean_abs_td
+0,28.0,0.0,0.31003275560498844,0.026729515471467465,0.00010088289816463437,0.00013314316286651415,0.010000000000000004,0.004510601065262701
