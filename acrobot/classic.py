@@ -38,7 +38,7 @@ ACTOR_THETA = 2.0
 GAMMA = 0.99
 
 # --- NEUROMODULATION PARAMETERS ---
-BASE_LR = 0.05
+BASE_LR = 0.000055
 BASE_NOISE = 0.5
 
 # NE logistic mapping params (unexpected uncertainty / novelty)
@@ -74,15 +74,15 @@ CRITIC_BASE_LR = 0.001
 VAR_DECAY = 0
 ACTOR_LR_DECAY = 0
 ACTOR_LR_BOOST = 0
-ACTOR_LR_MIN = 0.05
-ACTOR_LR_MAX = 0.05
+ACTOR_LR_MIN = 0.000055
+ACTOR_LR_MAX = 0.00055
 
 # ---------------------------------------------------------------------------
 # Environment / experiment params
 # ---------------------------------------------------------------------------
 SWITCH_EP = 7500
 TOTAL_EPISODES = 15000
-SEED = 1234
+SEED = 20
 
 # ---------------------------------------------------------------------------
 # Place Cell Encoder grid sizes (one per obs dim)
@@ -460,8 +460,8 @@ def train(args):
     # -----------------------------------------------------------------------
     # Plot (3 separate subplots for readability)
     # -----------------------------------------------------------------------
-    out_dir = (f"acrobot/runs/{args.seed}_flagship" if args.seed is not None
-               else "acrobot/runs/noseed_flagship")
+    out_dir = (f"acrobot/runs/{args.seed}_classic" if args.seed is not None
+               else "acrobot/runs/noseed_classic")
     os.makedirs(out_dir, exist_ok=True)
 
     episodes_x = range(len(reward_history))

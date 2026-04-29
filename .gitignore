@@ -30,7 +30,7 @@ venv.bak/
 # Experiment Results & Data
 *.png
 *.csv
-runs/
+
 vis_runs/
 
 # Jupyter Notebook

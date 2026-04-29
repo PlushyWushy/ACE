@@ -23,9 +23,9 @@ def run_experiment(script_path, seed, episodes):
         return f"FAILED: {name} | Seed: {seed} | Error: {e.stderr}"
 
 def main():
-    base_dir = "/Users/a../Desktop/Icarus/sb"
+    base_dir = "/Users/a../Desktop/Icarus/sb_gradual"
     scripts = [
-        ("icarus_upgraded.py", 20000),
+        ("icarus.py", 20000),
         ("classic.py", 20000)
     ]
     

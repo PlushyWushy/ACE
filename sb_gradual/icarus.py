@@ -48,6 +48,9 @@ TD_NOVELTY_MARGIN = 0.0
 CRITIC_LR = 1e-2
 SEED = 5
 
+SWITCH_EP = 10000
+ANNEAL_EPISODES = 200
+
 CRITIC_ACH_MIN_SCALE = 0.1
 CRITIC_ACH_MAX_SCALE = 1 
 
@@ -139,12 +142,14 @@ def train(episodes: int = 4000, seed: int | None = SEED):
     max_critic_scale = 0.0
 
     for ep in range(1, episodes + 1):
-        if ep <= 10000:
+        if ep <= SWITCH_EP:
             prob = [1.0, 0.0]
-            optimal = 0
+        elif ep <= SWITCH_EP + ANNEAL_EPISODES:
+            t = (ep - SWITCH_EP) / max(ANNEAL_EPISODES, 1)
+            prob = [1.0 - t, t]
         else:
             prob = [0.0, 1.0]
-            optimal = 1
+        optimal = 0 if prob[0] >= prob[1] else 1
 
         current_ne = logistic_drive(NE_MAX, NE_K, NE_CENTER, avg_surprise, BASE_NOISE)
         current_ne = min(current_ne, 5.0)
@@ -217,7 +222,8 @@ def train(episodes: int = 4000, seed: int | None = SEED):
 
     plt.figure(figsize=(10, 6))
     plt.plot(plot_episodes, reward_rates, linewidth=2, color="tab:blue", label="Reward Rate")
-    plt.axvline(x=10000, color="tab:red", linestyle="--", label="Switch")
+    plt.axvline(x=SWITCH_EP, color="tab:red", linestyle="--", label="Switch Start")
+    plt.axvline(x=SWITCH_EP + ANNEAL_EPISODES, color="tab:orange", linestyle="--", label="Switch End")
     plt.xlabel("Episode")
     plt.ylabel("Reward Rate (%)")
     plt.ylim(0, 105)
@@ -229,7 +235,7 @@ def train(episodes: int = 4000, seed: int | None = SEED):
     print(f"Max Critic Scale: {max_critic_scale:.3f}")
     
     # Ensure output directory exists and save both CSV and PNG in runs folder
-    out_dir = f"sb/sb_normal/runs/{seed}_icarus" if seed is not None else "sb/sb_normal/runs/noseed_icarus"
+    out_dir = f"sb_gradual/runs/{seed}_icarus" if seed is not None else "sb_gradual/runs/noseed_icarus"
     os.makedirs(out_dir, exist_ok=True)
 
     png_path = os.path.join(out_dir, f"{seed}_icarus.png")
