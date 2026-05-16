@@ -124,8 +124,8 @@ def save_plot(stats, out_png, out_csv, title):
     # x axis as window center episode
     x = np.array([(s + e) / 2.0 for s, e in indices])
     plt.figure(figsize=(8,4))
-    plt.plot(x, mean, color='C0')
-    plt.fill_between(x, mean-std, mean+std, color='C0', alpha=0.3)
+    plt.plot(x, mean, color='tab:green')
+    plt.fill_between(x, mean-std, mean+std, color='tab:green', alpha=0.3)
     plt.xlabel('Episode')
     plt.ylabel('Percent Optimal (%)')
     plt.title(title)

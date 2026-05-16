@@ -32,7 +32,7 @@ UNEXP_SURPRISE_DECAY = 0.8  # acts as leaky decay multiplier
 
 # Logistic neuromodulator params
 ACH_MAX = 1.0
-ACH_K = 5
+ACH_K = 5000000000000
 ACH_CENTER = 1.5
 
 NE_MAX = 2
@@ -53,7 +53,7 @@ TD_NOVELTY_MARGIN = 0.0
 CRITIC_LR = 1e-2
 SEED = 5
 
-CRITIC_ACH_MIN_SCALE = 0.1
+CRITIC_ACH_MIN_SCALE = 1
 CRITIC_ACH_MAX_SCALE = 1.0
 
 
@@ -291,7 +291,8 @@ def train(episodes: int = 4000, seed: int | None = SEED, **kwargs):
     plt.grid(True, alpha=0.3)
     plt.legend(loc="lower right")
     
-    out_dir = f"sb/sb_normal/runs/{seed}_icarus_upgraded" if seed is not None else "sb/sb_normal/runs/noseed_icarus_upgraded"
+    tag = kwargs.get('tag', 'icarus_upgraded')
+    out_dir = os.path.join("sb_normal", "runs", f"{seed}_{tag}") if seed is not None else os.path.join("sb_normal", "runs", f"noseed_{tag}")
     os.makedirs(out_dir, exist_ok=True)
 
     png_path = os.path.join(out_dir, "plot.png")
@@ -315,5 +316,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=20000)
     parser.add_argument("--seed", type=int, default=None, help="Random seed (optional)")
+    parser.add_argument("--ne_max", type=float, default=2.0)
+    parser.add_argument("--ach_max", type=float, default=1.0)
+    parser.add_argument("--base_noise", type=float, default=0.0)
+    parser.add_argument("--base_lr", type=float, default=1e-2)
+    parser.add_argument("--tag", type=str, default="icarus_upgraded")
     args = parser.parse_args()
-    train(args.episodes, seed=args.seed)
+    
+    train(args.episodes, seed=args.seed, NE_MAX=args.ne_max, ACH_MAX=args.ach_max, 
+          BASE_NOISE=args.base_noise, BASE_LR=args.base_lr, tag=args.tag)
