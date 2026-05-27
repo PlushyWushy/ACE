@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Surrogate baseline for the switch bandit experiment.
+Surrogate baseline for the multi-switch bandit experiment.
 Standard softmax policy gradient (REINFORCE) with a linear critic, trained via Adam.
-Matches the time scale of sb/icarus_upgraded.py (20,000 episodes, switch at 10,000).
+Matches the time scale of sb_multiswitch/icarus_upgraded_multiswitch.py
+(60,000 episodes, 4 arms, deterministic switches at 15k/30k/45k).
 
 Key differences from the spiking ACE model:
-- Actor: softmax policy over learned logits → REINFORCE update (vs Hebbian + neuromodulation)
+- Actor: softmax policy over 4 learned logits → REINFORCE update (vs Hebbian + neuromodulation)
 - Critic: linear value head → MSE via Adam (vs local TD-LTP)
 - Exploration: softmax entropy (vs stochastic Bernoulli spikes + NE-driven noise)
 - No neuromodulation: fixed learning rates throughout
@@ -27,8 +28,9 @@ CRITIC_LR = 0.01
 ENTROPY_COEF = 0.01
 
 # Environment
-EPISODES = 20000
-SWITCH_EP = 10000
+EPISODES = 60000
+N_ARMS = 4
+SWITCH_SCHEDULE = [15000, 30000, 45000]
 
 # Surprise trace params (for logging, not used for modulation)
 TD_FAST_ALPHA = 0.097663
@@ -50,9 +52,21 @@ def set_global_seed(seed: int | None):
         torch.cuda.manual_seed_all(seed)
 
 
+def _get_deterministic_switches(n_arms: int):
+    """Same deterministic switch sequence as the spiking counterpart.
+    Arm sequence: 0 → 1 → 2 → 3 → 0 ..."""
+    points = sorted(SWITCH_SCHEDULE)
+    arm_sequence = []
+    current_arm = 0
+    for _ in points:
+        current_arm = (current_arm + 1) % n_arms
+        arm_sequence.append(current_arm)
+    return points, arm_sequence
+
+
 class SoftmaxActor(nn.Module):
     """Softmax policy over n_actions. Standard ML policy gradient actor."""
-    def __init__(self, n_actions: int = 2):
+    def __init__(self, n_actions: int = 4):
         super().__init__()
         self.logits = nn.Parameter(torch.zeros(n_actions))
 
@@ -76,10 +90,12 @@ class LinearCritic(nn.Module):
         return v, var
 
 
-def train(episodes: int = EPISODES, seed: int | None = SEED):
+def train(episodes: int = EPISODES, seed: int | None = SEED, n_arms: int = N_ARMS):
     set_global_seed(seed)
 
-    actor = SoftmaxActor(n_actions=2)
+    switch_points, arm_sequence = _get_deterministic_switches(n_arms)
+
+    actor = SoftmaxActor(n_actions=n_arms)
     critic = LinearCritic()
     actor_optim = optim.Adam(actor.parameters(), lr=ACTOR_LR)
     critic_optim = optim.Adam(critic.parameters(), lr=CRITIC_LR)
@@ -95,14 +111,18 @@ def train(episodes: int = EPISODES, seed: int | None = SEED):
     unexpected_history = []
     expected_history = []
 
+    optimal_arm = 0
+
     for ep in range(1, episodes + 1):
-        # Environment: deterministic switch at SWITCH_EP
-        if ep <= SWITCH_EP:
-            prob = [1.0, 0.0]
-            optimal = 0
-        else:
-            prob = [0.0, 1.0]
-            optimal = 1
+        # Check for switch
+        if switch_points and ep == switch_points[0]:
+            optimal_arm = arm_sequence.pop(0)
+            switch_points.pop(0)
+
+        # Build reward probabilities: 1.0 for optimal arm, 0.0 for others
+        prob = [0.0] * n_arms
+        prob[optimal_arm] = 1.0
+        optimal = optimal_arm
 
         # Forward pass
         action, log_prob, entropy = actor()
@@ -147,15 +167,15 @@ def train(episodes: int = EPISODES, seed: int | None = SEED):
         unexpected_history.append(avg_unexpected)
         expected_history.append(avg_expected)
 
-        if ep % 1000 == 0:
-            recent = np.mean(reward_history[-200:]) * 100 if len(reward_history) >= 200 else np.mean(reward_history) * 100
-            print(f"Ep {ep:6d} | Opt%: {recent:5.1f} | Unexpected: {avg_unexpected:.3f} | Expected: {avg_expected:.4f}")
+        if ep % 5000 == 0:
+            recent = np.mean(reward_history[-500:]) * 100 if len(reward_history) >= 500 else np.mean(reward_history) * 100
+            print(f"Ep {ep:6d} | Opt%: {recent:5.1f} | Optimal Arm: {optimal_arm} | Unexpected: {avg_unexpected:.3f} | Expected: {avg_expected:.4f}")
 
     # Save CSV
-    out_dir = f"surrogate_baseline/runs/{seed}_bandit_surrogate" if seed is not None else "surrogate_baseline/runs/noseed_bandit_surrogate"
+    out_dir = f"surrogate_baseline/runs/{seed}_bandit_multiswitch_surrogate" if seed is not None else "surrogate_baseline/runs/noseed_bandit_multiswitch_surrogate"
     os.makedirs(out_dir, exist_ok=True)
 
-    csv_path = os.path.join(out_dir, f"{seed}_bandit_surrogate.csv")
+    csv_path = os.path.join(out_dir, f"{seed}_bandit_multiswitch_surrogate.csv")
     with open(csv_path, "w") as fh:
         fh.write("episode,is_optimal,expected,unexpected\n")
         for i, (r, e, u) in enumerate(zip(reward_history, expected_history, unexpected_history)):
@@ -168,5 +188,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=EPISODES)
     parser.add_argument("--seed", type=int, default=None, help="Random seed (optional)")
+    parser.add_argument("--arms", type=int, default=N_ARMS, help="Number of arms")
     args = parser.parse_args()
-    train(args.episodes, seed=args.seed)
+    train(args.episodes, seed=args.seed, n_arms=args.arms)

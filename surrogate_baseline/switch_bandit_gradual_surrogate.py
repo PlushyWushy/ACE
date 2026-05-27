@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Surrogate baseline for the switch bandit experiment.
+Surrogate baseline for the gradual switch bandit experiment.
 Standard softmax policy gradient (REINFORCE) with a linear critic, trained via Adam.
-Matches the time scale of sb/icarus_upgraded.py (20,000 episodes, switch at 10,000).
+Matches the time scale of sb_gradual/icarus_upgraded.py (20,000 episodes, gradual switch
+starting at 10,000 over 200 episodes).
 
 Key differences from the spiking ACE model:
 - Actor: softmax policy over learned logits → REINFORCE update (vs Hebbian + neuromodulation)
@@ -29,6 +30,7 @@ ENTROPY_COEF = 0.01
 # Environment
 EPISODES = 20000
 SWITCH_EP = 10000
+ANNEAL_EPISODES = 200
 
 # Surprise trace params (for logging, not used for modulation)
 TD_FAST_ALPHA = 0.097663
@@ -96,13 +98,15 @@ def train(episodes: int = EPISODES, seed: int | None = SEED):
     expected_history = []
 
     for ep in range(1, episodes + 1):
-        # Environment: deterministic switch at SWITCH_EP
+        # Environment: gradual annealing switch
         if ep <= SWITCH_EP:
             prob = [1.0, 0.0]
-            optimal = 0
+        elif ep <= SWITCH_EP + ANNEAL_EPISODES:
+            t = (ep - SWITCH_EP) / max(ANNEAL_EPISODES, 1)
+            prob = [1.0 - t, t]
         else:
             prob = [0.0, 1.0]
-            optimal = 1
+        optimal = 0 if prob[0] >= prob[1] else 1
 
         # Forward pass
         action, log_prob, entropy = actor()
@@ -152,10 +156,10 @@ def train(episodes: int = EPISODES, seed: int | None = SEED):
             print(f"Ep {ep:6d} | Opt%: {recent:5.1f} | Unexpected: {avg_unexpected:.3f} | Expected: {avg_expected:.4f}")
 
     # Save CSV
-    out_dir = f"surrogate_baseline/runs/{seed}_bandit_surrogate" if seed is not None else "surrogate_baseline/runs/noseed_bandit_surrogate"
+    out_dir = f"surrogate_baseline/runs/{seed}_bandit_gradual_surrogate" if seed is not None else "surrogate_baseline/runs/noseed_bandit_gradual_surrogate"
     os.makedirs(out_dir, exist_ok=True)
 
-    csv_path = os.path.join(out_dir, f"{seed}_bandit_surrogate.csv")
+    csv_path = os.path.join(out_dir, f"{seed}_bandit_gradual_surrogate.csv")
     with open(csv_path, "w") as fh:
         fh.write("episode,is_optimal,expected,unexpected\n")
         for i, (r, e, u) in enumerate(zip(reward_history, expected_history, unexpected_history)):

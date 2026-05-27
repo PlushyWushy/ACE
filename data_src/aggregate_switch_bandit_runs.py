@@ -11,10 +11,10 @@ It treats post-switch as episodes with index >= 2000 (0-based indexing).
 from pathlib import Path
 import csv
 
-RUNS_DIR = Path("switch_bandit_experiment/runs")
+RUNS_DIR = Path("sb/sb_normal/runs")
 OUT_TOTAL = Path("switch_bandit_experiment/total_rewards_comparison.csv")
 OUT_POST = Path("switch_bandit_experiment/post_switch_rewards_comparison.csv")
-SWITCH_EP = 2000  # 0-based: episodes >= 2000 are post-switch (episodes 2001..)
+SWITCH_EP = 10000  # 0-based: episodes >= 10000 are post-switch (episodes 10001..)
 
 
 def infer_and_sum(csv_path: Path):
@@ -98,7 +98,7 @@ def main():
         # parse type and seed from folder name e.g. '1_icarus' or '10_classic'
         parts = d.name.split("_")
         seed = parts[0]
-        rtype = parts[1] if len(parts) > 1 else "unknown"
+        rtype = "_".join(parts[1:]) if len(parts) > 1 else "unknown"
         runs.append({"run": d.name, "seed": seed, "type": rtype, "csv": str(chosen), "total": total, "post": post, "n_rows": n})
 
     # write total summary

@@ -11,9 +11,9 @@ import csv
 import numpy as np
 import matplotlib.pyplot as plt
 
-RUNS_DIR = Path("switch_bandit_experiment/runs")
-OUT_PNG = Path("switch_bandit_experiment/classic_avg_reward_rate.png")
-OUT_STATS = Path("switch_bandit_experiment/classic_reward_rate_stats.csv")
+RUNS_DIR = Path("sb/sb_normal/runs")
+OUT_PNG = Path("sb/sb_normal/classic_avg_reward_rate.png")
+OUT_STATS = Path("sb/sb_normal/classic_reward_rate_stats.csv")
 WINDOW = 50
 
 
@@ -102,11 +102,12 @@ def main():
     plt.figure(figsize=(10,6))
     plt.plot(episodes, mean, color='tab:orange', lw=2, label='Mean reward rate')
     plt.fill_between(episodes, mean - std, mean + std, color='tab:orange', alpha=0.25, label='±1 std')
+    plt.axvline(x=10000, color='tab:red', linestyle='--', label='Switch')
     plt.xlabel('Episode')
     plt.ylabel('Percent Optimal (%)')
     plt.title('Classic - Average Reward Rate across seeds (±STD)')
     plt.grid(True, alpha=0.3)
-    plt.ylim(0, 100)
+    plt.ylim(0, 105)
     plt.legend()
 
     OUT_PNG.parent.mkdir(parents=True, exist_ok=True)

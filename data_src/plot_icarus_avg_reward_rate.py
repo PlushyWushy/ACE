@@ -11,9 +11,9 @@ import csv
 import numpy as np
 import matplotlib.pyplot as plt
 
-RUNS_DIR = Path("switch_bandit_experiment/runs")
-OUT_PNG = Path("switch_bandit_experiment/icarus_avg_reward_rate.png")
-OUT_STATS = Path("switch_bandit_experiment/icarus_reward_rate_stats.csv")
+RUNS_DIR = Path("sb/sb_normal/runs")
+OUT_PNG = Path("sb/sb_normal/ACE_avg_reward_rate.png")
+OUT_STATS = Path("sb/sb_normal/ACE_reward_rate_stats.csv")
 WINDOW = 50
 
 
@@ -46,7 +46,7 @@ def windowed_reward_rate(arr: np.ndarray, window=WINDOW):
 def main():
     runs = []
     for d in sorted(RUNS_DIR.iterdir(), key=lambda p: p.name):
-        if not d.is_dir() or not d.name.endswith('_icarus'):
+        if not d.is_dir() or not d.name.endswith('_icarus_upgraded'):
             continue
         # find csv inside
         csvs = list(d.glob('*.csv'))
@@ -73,7 +73,7 @@ def main():
         runs.append({'run': d.name, 'seed': d.name.split('_')[0], 'rates': rates})
 
     if not runs:
-        print('No icarus runs found.')
+        print('No icarus_upgraded runs found.')
         return
 
     # align runs to common length (min length)
@@ -91,11 +91,12 @@ def main():
     plt.figure(figsize=(10,6))
     plt.plot(episodes, mean, color='tab:blue', lw=2, label='Mean reward rate')
     plt.fill_between(episodes, mean - std, mean + std, color='tab:blue', alpha=0.25, label='±1 std')
+    plt.axvline(x=10000, color='tab:red', linestyle='--', label='Switch')
     plt.xlabel('Episode')
     plt.ylabel('Percent Optimal (%)')
-    plt.title('Icarus - Average Reward Rate across seeds (±STD)')
+    plt.title('ACE - Average Reward Rate across seeds (±STD)')
     plt.grid(True, alpha=0.3)
-    plt.ylim(0, 100)
+    plt.ylim(0, 105)
     plt.legend()
 
     OUT_PNG.parent.mkdir(parents=True, exist_ok=True)
