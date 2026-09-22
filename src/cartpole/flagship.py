@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Switch CartPole with decoupled uncertainty following Yu & Dayan's conjecture:
-- NE (Noradrenaline) driven by *unexpected* uncertainty (fast-slow TD novelty)
-- ACh (Acetylcholine) driven by *expected* uncertainty (critic's variance estimate)
+Switch CartPole trained with ACE. NE (action noise) follows unexpected
+uncertainty (fast/slow TD novelty); ACh (actor learning rate) follows expected
+uncertainty (critic variance). The critic is trained with a local TD-LTP rule.
+Controls invert after episode 5000.
 
-Critic uses a local TD-LTP style update with loss as a multiplicative factor.
-Actor LR decays each step and is boosted by ACh (not set equal to ACh).
+    python src/cartpole/flagship.py --seed 1
+    python src/cartpole/flagship.py --seed 1 --ne_center 1.5e27   # ACh-only ablation
+    python src/cartpole/flagship.py --seed 1 --ach_center 1e27    # NE-only ablation
 """
 
 #TODO: Run with low ACh center with switch; run with high ACh center without switch.
@@ -25,9 +27,6 @@ try:
 except ImportError:
     import gym
 
-# --------------------------------------------------------------------------- 
-# Constants
-# --------------------------------------------------------------------------- 
 
 DT = 0.02
 RHO_PC = 50.0
@@ -35,16 +34,16 @@ TAU_M = 0.02
 ACTOR_THETA = 2.0
 GAMMA = 0.99
 
-# --- NEUROMODULATION PARAMETERS ---
+# Neuromodulation
 BASE_LR = 0.000055 
 BASE_NOISE = 1
 
-# NE logistic mapping params (for unexpected uncertainty / novelty)
+# NE: unexpected uncertainty -> action noise
 NE_MAX = 3
 NE_K = 0.2
 NE_CENTER = 15
 
-# ACh logistic mapping params (for expected uncertainty / variance)
+# ACh: expected uncertainty -> actor learning rate
 ACH_MAX = 1
 ACH_K = 10
 ACH_CENTER = 5
@@ -53,30 +52,24 @@ ACH_CENTER = 5
 EXP_SURPRISE_DECAY = 0.01  
 UNEXP_SURPRISE_DECAY = 0.8 
 
-# If =1.0 -> divide by sigma (z-ish). If =0.0 -> ignore variance term.
+# 1: divide the TD signal by sigma; 0: don't
 SURPRISE_VARIANCE_WEIGHT = 0
 SURPRISE_EPS = 1e-3
 
-# --------------------------------------------------------------------------- 
-# Fast–slow TD novelty (habituation / baseline subtraction) for UNEXPECTED uncertainty
-# --------------------------------------------------------------------------- 
-# TD signal is |TD| / (sigma**SURPRISE_VARIANCE_WEIGHT), then clipped.
+# Unexpected uncertainty: fast/slow TD novelty
 TD_SIGNAL_CLIP = 20.0
 
-# Fast trace reacts quickly; slow trace is "what I'm used to".
 TD_FAST_ALPHA = 0.097663     # ~20-step timescale
 TD_SLOW_ALPHA = 0.003642    # ~1000-step timescale
 
-# Faster traces for expected uncertainty (ACh)
-EXP_FAST_ALPHA = 1    # 
+# Expected-uncertainty traces
+EXP_FAST_ALPHA = 1
 EXP_SLOW_ALPHA = 0.1
 
-# Extra deadzone after baseline subtraction (helps suppress tiny random novelty).
+# Dead zone after baseline subtraction
 TD_NOVELTY_MARGIN = 0.0
 
-# --------------------------------------------------------------------------- 
-# Actor LR modulation params
-# --------------------------------------------------------------------------- 
+# Learning rates
 CRITIC_BASE_LR = 0.001
 
 VAR_DECAY = 0
@@ -85,7 +78,7 @@ ACTOR_LR_BOOST = 0.1
 ACTOR_LR_MIN = 1e-4
 ACTOR_LR_MAX = 0.1
 
-# Editable global seed (set to None for non-deterministic runs)
+# None = unseeded
 SEED = 1234
 
 RESULTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole"))
@@ -109,9 +102,8 @@ def set_global_seed(seed: int | None):
 
 
 def logistic_drive(max_val: float, k: float, center: float, signal: float, base: float) -> float:
-    # numerically-stable logistic: clip the exponent to avoid overflow
     z = k * (signal - center)
-    # clip thresholds chosen to avoid math.exp overflow on most platforms
+    # avoid math.exp overflow
     if z >= 700:
         return max_val + base
     if z <= -700:
@@ -119,9 +111,7 @@ def logistic_drive(max_val: float, k: float, center: float, signal: float, base:
     return max_val / (1.0 + math.exp(-z)) + base
 
 
-# --------------------------------------------------------------------------- 
-# 1. Place Cell Encoder
-# --------------------------------------------------------------------------- 
+# Place-cell encoder
 class PlaceCellEncoder(nn.Module):
     def __init__(self, device: torch.device):
         super().__init__()
@@ -153,9 +143,7 @@ class PlaceCellEncoder(nn.Module):
         return spikes
 
 
-# --------------------------------------------------------------------------- 
-# 2. Local TD-LTP Critic (value + variance)
-# --------------------------------------------------------------------------- 
+# TD-LTP critic (value + variance heads)
 class LocalCritic:
     def __init__(self, n_input: int, device: torch.device):
         self.w_val = torch.zeros(n_input, device=device)
@@ -172,7 +160,7 @@ class LocalCritic:
         return val, var
 
     def update(self, input_spikes: torch.Tensor, td_error: torch.Tensor, var: torch.Tensor, lr: float):
-        # TD-LTP: local delta rule with loss as a multiplicative factor.
+        # TD-LTP: delta rule scaled by |TD|
         val_loss = td_error.abs().detach()
         delta_val = lr * val_loss * td_error.detach()
         self.w_val += delta_val * input_spikes
@@ -182,10 +170,7 @@ class LocalCritic:
             self.w_var *= (1.0 - VAR_DECAY)
             self.b_var *= (1.0 - VAR_DECAY)
 
-        # Variance tracks squared TD error with a similar loss-scaled update.
-        # err_var = (td_error.detach().abs() - var.detach())
-        # var_loss = err_var.pow(2)
-        # delta_var = lr * var_loss * err_var
+        # variance head tracks TD^2
         target_var = td_error.detach().pow(2)
         err_var = target_var - var.detach()
         delta_var = lr * err_var    
@@ -193,9 +178,7 @@ class LocalCritic:
         self.b_var += delta_var
 
 
-# --------------------------------------------------------------------------- 
-# 3. Modulated Actor
-# --------------------------------------------------------------------------- 
+# Spiking actor
 class ModulatedActor(nn.Module):
     def __init__(self, n_input: int, device: torch.device):
         super().__init__()
@@ -306,14 +289,11 @@ def train(args):
 
         inverted = (ep > 5000)
 
-        # =====================================================================
-        # DECOUPLED NEUROMODULATION
-        # =====================================================================
-        # NE driven by unexpected uncertainty (novelty)
+        # NE from unexpected uncertainty
         current_ne = logistic_drive(args.ne_max, args.ne_k, args.ne_center, avg_unexpected, args.base_noise)
         current_ne = min(current_ne, 5.0)
 
-        # ACh uses its own logistic (expected uncertainty -> modulatory signal).
+        # ACh from expected uncertainty
         current_ach = logistic_drive(args.ach_max, args.ach_k, args.ach_center, avg_expected, args.base_lr)
 
         td_sum = 0.0
@@ -325,7 +305,7 @@ def train(args):
         actor_lr_sum = 0.0
         actor_lr_count = 0
 
-        # For printing/debug visibility
+        # for logging
         last_td_signal = 0.0
         last_td_fast = td_fast
         last_td_slow = td_slow
@@ -341,9 +321,7 @@ def train(args):
             done = terminated or truncated
             next_obs_t = torch.tensor(next_obs, dtype=torch.float32, device=device)
 
-            # ------------------------------- 
             # Critic update
-            # ------------------------------- 
             v_curr, var_curr = critic.forward(spikes)
             var_sum += float(var_curr.item())
             var_count += 1
@@ -376,22 +354,16 @@ def train(args):
             actor_lr_sum += actor_lr
             actor_lr_count += 1
 
-            # ------------------------------- 
             # Actor update
-            # ------------------------------- 
             actor.update(td_error_val, act_spikes, current_lr=actor_lr)
 
-            # =====================================================================
-            # EXPECTED UNCERTAINTY: Direct EMA of critic's variance estimate
-            # =====================================================================
+            # Expected uncertainty: EMA of critic sigma
             current_sigma = torch.sqrt(var_curr.detach()).item()
             current_sigma = max(current_sigma, SURPRISE_EPS)
             
             avg_expected = (1.0 - EXP_SURPRISE_DECAY) * avg_expected + EXP_SURPRISE_DECAY * current_sigma
 
-            # =====================================================================
-            # UNEXPECTED UNCERTAINTY: Fast-slow TD novelty
-            # =====================================================================
+            # Unexpected uncertainty: fast/slow TD novelty
             td_signal = abs(td_error_val) / (current_sigma ** SURPRISE_VARIANCE_WEIGHT)
             td_signal = float(min(max(td_signal, 0.0), TD_SIGNAL_CLIP))
 
@@ -404,9 +376,9 @@ def train(args):
                 td_slow = (1.0 - args.td_slow_alpha) * td_slow + args.td_slow_alpha * td_signal
 
             td_novelty = max(0.0, td_fast - td_slow - TD_NOVELTY_MARGIN)
-            avg_unexpected = UNEXP_SURPRISE_DECAY * avg_unexpected + td_novelty #(1.0 - UNEXP_SURPRISE_DECAY) * td_novelty
+            avg_unexpected = UNEXP_SURPRISE_DECAY * avg_unexpected + td_novelty
 
-            # Update dynamics for next step
+            # modulators for the next step
             current_ne = logistic_drive(args.ne_max, args.ne_k, args.ne_center, avg_unexpected, args.base_noise)
             current_ne = min(current_ne, 5.0)
             current_ach = logistic_drive(args.ach_max, args.ach_k, args.ach_center, avg_expected, args.base_lr)
@@ -414,7 +386,7 @@ def train(args):
             obs_t = next_obs_t
             total_reward += float(reward)
 
-            # keep last-step debug values for printouts
+            # for logging
             last_td_signal = td_signal
             last_td_fast = td_fast
             last_td_slow = td_slow
@@ -445,9 +417,7 @@ def train(args):
 
     print(f"Max Critic Scale: {max_critic_scale:.3f}")
 
-    # ----------------------------------------------------------------------- 
-    # Plot results
-    # ----------------------------------------------------------------------- 
+    # Plot
     fig, ax1 = plt.subplots(figsize=(10, 6))
 
     ax1.plot(range(len(reward_history)), reward_history, color="tab:blue", linewidth=1, alpha=0.6, label="Reward")

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Grid-search over BASE_LR × BASE_NOISE for classic.py.
-3 × 3 = 9 configs, 3 seeds each → 27 runs total.
-Outputs CSVs to results/cartpole/classic_hyperparam_search/config_<id>_seed_<seed>.csv
+Grid search over actor learning rate x base noise for classic.py, 3 seeds per
+config. Writes to results/cartpole/classic_hyperparam_search/.
 """
 
 import os
@@ -24,7 +23,7 @@ BASE_NOISE_VALUES   = [0.5, 1.0, 1.5, 2.0, 3.0]
 # Build ordered config list so config_id is stable
 CONFIGS = {}
 for cid, (lr_min, noise) in enumerate(itertools.product(ACTOR_LR_MIN_VALUES, BASE_NOISE_VALUES)):
-    # actor_lr_max = actor_lr_min keeps the pinned-LR behaviour of the default config
+    # actor_lr_max = actor_lr_min keeps the LR fixed
     CONFIGS[cid] = dict(actor_lr_min=lr_min, actor_lr_max=lr_min, base_noise=noise)
 
 

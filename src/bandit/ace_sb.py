@@ -1,37 +1,9 @@
 #!/usr/bin/env python3
 """
-Switch Bandit with ACE — corrected neuromodulator placement.
+Switch Bandit trained with ACE: ACh sets the actor learning rate, NE sets the
+action noise. Two arms, reward swaps at SWITCH_EP.
 
-Identical dynamics to sb/icarus_upgraded.py (same actor, critic, TD-LTP rule,
-fast/slow surprise traces, seeding).  The only changes are the logistic
-parameters that map surprise signals onto ACh and NE, plus logging.
-
-WHY THIS EXISTS
----------------
-In sb/icarus_upgraded.py the two logistics were centred at 1.5 while the signals
-they read never got near it.  Measured over the 20 runs behind the paper's
-Switch Bandit numbers:
-
-    unexpected uncertainty  n_u  in [0.000, 0.0133]   vs  c_NE  = 1.5
-    expected   uncertainty  n_e  in [0.010, 1.019]    vs  c_ACh = 1.5
-
-so sigma_NE moved 0.3649 -> 0.3688 (1.1%) and ACh sat on its base_lr floor of
-0.0100 for every episode of every run, in *all three* ablation arms.  Neither
-neuromodulator adapted.  ACH_K was also 5e12 (a step function) rather than the
-5 reported in the paper.
-
-FIXES
------
-    ACH_K      5e12 -> 5       (the value the paper reports; k*span ~ 4.4 for a
-                                signal spanning ~1.0)
-    ACH_CENTER 1.5  -> 0.5     (mid-range of the observed n_e)
-    NE_K       1.0  -> 340     (k*span ~ 4.4 for a signal spanning ~0.013)
-    NE_CENTER  1.5  -> 0.006   (mid-range of the observed n_u; also DECOUPLED —
-                                it was aliased to ACH_CENTER)
-
-Every run logs the realised ACh and sigma_NE per episode and prints their range
-at exit, so an inert logistic can never again hide behind a plot of the raw
-signal.
+    python src/bandit/ace_sb.py --seed 1
 """
 
 import math
@@ -43,39 +15,26 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# ---------------------------------------------------------------------------
-# Shared constants (unchanged from sb/icarus_upgraded.py)
-# ---------------------------------------------------------------------------
 DT = 0.02
 TAU_M = 0.02
 ACTOR_THETA = 2.0
 
 BASE_LR = 1e-2
-BASE_NOISE = 0.33               # floor for sigma_NE; was 0.0
+BASE_NOISE = 0.33               # sigma_NE floor
 
-EXP_SURPRISE_DECAY = 1.0        # beta_e = 1 -> no smoothing (as in the original)
-UNEXP_SURPRISE_DECAY = 0.8      # leaky integrator on the novelty signal
+EXP_SURPRISE_DECAY = 1.0        # beta_e = 1: no smoothing
+UNEXP_SURPRISE_DECAY = 0.8      # leak on the novelty signal
 
-# ---------------------------------------------------------------------------
-# Logistic neuromodulator params  -- THE CORRECTED BLOCK
-# ---------------------------------------------------------------------------
-# Output ranges matter as much as the centres: the originals were sized for a
-# logistic that never fired, so ACH_MAX=1.0 used directly as a learning rate
-# thrashes the policy the moment the logistic *does* fire (measured: total
-# reward 14.7k -> 3.0k).  These are sized so ACh spans ~0.011-0.027 and
-# sigma_NE spans ~0.38-0.70, i.e. modulation of 136% / 86% around the operating
-# point the original ran at.
-ACH_MAX = 0.04                  # was 1.0
-ACH_K = 30.0                    # was 5e12
-ACH_CENTER = 0.5                # was 1.5
+# Logistics mapping surprise to ACh (learning rate) and NE (noise).
+# Centres sit mid-range of the observed signals: n_e in ~[0, 1], n_u in ~[0, 0.013].
+ACH_MAX = 0.04
+ACH_K = 30.0
+ACH_CENTER = 0.5
 
-NE_MAX = 0.4                    # was 2.0
-NE_K = 340.0                    # was 1.0
-RUNS = os.path.join(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "bandit")), "runs")
+NE_MAX = 0.4
+NE_K = 340.0
+NE_CENTER = 0.006
 
-NE_CENTER = 0.006               # was ACH_CENTER (1.5), and aliased to it
-
-# Surprise trace hyperparameters (unchanged)
 SURPRISE_VARIANCE_WEIGHT = 0.0
 SURPRISE_EPS = 1e-3
 TD_SIGNAL_CLIP = 20.0
@@ -84,9 +43,11 @@ TD_SLOW_ALPHA = 0.1
 TD_NOVELTY_MARGIN = 0.0
 
 CRITIC_LR = 1e-2                # value head
-CRITIC_VAR_LR = 2.0             # variance head, decoupled (was tied to CRITIC_LR)
+CRITIC_VAR_LR = 2.0             # variance head
 SWITCH_EP = 10000
 SEED = 5
+
+RUNS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "bandit", "runs"))
 
 
 def set_global_seed(seed):
@@ -114,10 +75,7 @@ class LocalCritic:
         return self.forward(*args, **kwargs)
 
     def update(self, input_spikes, td_error, var_raw, lr: float, lr_var: float = None):
-        """var_raw MUST be the pre-clamp variance.  Feeding the clamped value back in
-        makes the error term a constant negative push whenever delta^2 < the clamp,
-        so the variance weights integrate without bound (~-200 over 10k episodes) and
-        the head cannot respond for ~100 episodes after a switch.  Standard anti-windup."""
+        # var_raw is the unclamped variance; using the clamped one winds up the variance weights.
         val_loss = td_error.abs().detach()
         delta_val = lr * val_loss * td_error.detach()
         self.w_val += delta_val * input_spikes

@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
-Train the top 10 sweep configurations (ranked by mean total reward across all episodes)
-for 5 seeds each, using src/cartpole/flagship.py.
+Retrain the 10 best sweep configs (by mean total reward) for 5 seeds each.
 
-Top 10 configs (from random_search_configs.csv, ranked by mean reward over 10k episodes):
   Rank  Config  Mean reward
      1      71       186.34
      2      38       175.49

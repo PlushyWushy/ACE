@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 """
-Gradual and Multi-switch Switch Bandit under the corrected implementation.
+Gradual and multi-switch variants of the ACE Switch Bandit (same model as ace_sb.py).
 
-Same dynamics, critic and neuromodulator pathways as ace_sb.py -- including the
-anti-windup fix (raw variance in its own update) and the decoupled variance-head
-rate -- generalised to:
+  gradual      2 arms, 20k episodes, arms swap over 200 episodes starting at 10k
+  multiswitch  4 arms, 60k episodes, correct arm advances at 15k / 30k / 45k
 
-  gradual      2 arms, 20,000 eps, switch at 10,000, probabilities linearly
-               annealed over 200 episodes   (matches sb_gradual/icarus_upgraded.py)
-  multiswitch  4 arms, 60,000 eps, correct arm advanced at 15k / 30k / 45k
-               (matches surrogate_baseline/switch_bandit_multiswitch_surrogate.py)
+Ablations freeze each modulator at full ACE's mean value.
 
-Ablations are level-matched: each modulator is frozen at the mean value full ACE
-itself used, so the comparison isolates adaptivity from the operating point.
-
-    python3 ace_variants.py --variant gradual
-    python3 ace_variants.py --variant multiswitch
+    python src/bandit/ace_variants.py --variant gradual
+    python src/bandit/ace_variants.py --variant multiswitch
 """
 
 import argparse
@@ -69,7 +62,7 @@ class Actor(nn.Module):
 
 
 def env(ep, cfg):
-    """returns (prob vector, optimal arm) for this episode"""
+    """Return (arm probabilities, optimal arm) for episode ep."""
     n, sw, an = cfg["arms"], cfg["switches"], cfg["anneal"]
     k = sum(1 for s in sw if ep > s)            # how many switches have passed
     cur = k % n
@@ -110,7 +103,7 @@ def run(a):
         var = torch.clamp(var_raw, min=0.01)
         td = rw - v
         tdv = float(td.item())
-        critic.update(x, td, var_raw, lr=CRITIC_LR, lr_var=CRITIC_VAR_LR)   # anti-windup
+        critic.update(x, td, var_raw, lr=CRITIC_LR, lr_var=CRITIC_VAR_LR)   # update on unclamped variance
         actor.update(tdv, sp, ach)
 
         n_e = (1.0 - EXP_BETA) * n_e + EXP_BETA * float(var.detach().item())

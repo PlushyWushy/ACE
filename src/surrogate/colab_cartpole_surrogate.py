@@ -14,12 +14,11 @@ try:
 except ImportError:
     import gym
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# Config
 SEEDS          = [1]            # list(range(1, 21)) for full 20-seed batch
 TOTAL_EPISODES = 10000
 SWITCH_EP      = 5000           # action mapping inverts at this episode
 OUTPUT_DIR     = "/content/cartpole_surrogate_runs"
-# ─────────────────────────────────────────────────────────────────────────────
 
 DT            = 0.02
 RHO_PC        = 50.0
@@ -36,10 +35,8 @@ ACTOR_LR_MAX   = 0.05
 
 CRITIC_BASE_LR = 0.001
 
-# Stability: soft-update a frozen target critic to generate TD targets.
-# Breaks the moving-target feedback loop that causes the policy to collapse.
-# TAU=0 means never update (fully frozen); TAU=1 means no target (current behaviour).
-TARGET_CRITIC_TAU = 0.01        # how fast target tracks critic (per episode)
+# Target critic for TD targets, soft-updated once per episode (0 = frozen, 1 = no target).
+TARGET_CRITIC_TAU = 0.01        # per-episode soft-update rate
 
 # Surprise signal (kept for logging; neuromod is off)
 TD_SIGNAL_CLIP     = 20.0
@@ -189,7 +186,7 @@ def train(seed, episodes=TOTAL_EPISODES):
 
             v_curr, var_curr = critic(spikes)
 
-            # Use frozen target critic for the TD target — breaks the moving-target loop
+            # TD target from the target critic
             with torch.no_grad():
                 v_next = target_critic(encoder(next_obs_t))[0] if not done else torch.zeros(1)
 
@@ -241,12 +238,12 @@ def train(seed, episodes=TOTAL_EPISODES):
     return reward_history
 
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+# Run
 all_rewards = {}
 for s in SEEDS:
     all_rewards[s] = train(s)
 
-# ── Plot ──────────────────────────────────────────────────────────────────────
+# Plot
 fig, ax = plt.subplots(figsize=(12, 4))
 W = 100
 for s, rewards in all_rewards.items():
@@ -260,7 +257,7 @@ plot_path = os.path.join(OUTPUT_DIR, "rewards.png")
 plt.savefig(plot_path, dpi=120, bbox_inches='tight')
 plt.show()
 
-# ── Download (Colab only) ─────────────────────────────────────────────────────
+# Download (Colab only)
 try:
     import shutil
     from google.colab import files

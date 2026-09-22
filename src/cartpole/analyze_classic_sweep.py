@@ -23,7 +23,7 @@ EPISODES   = 10000
 SEEDS      = [1, 2, 3, 4, 5]
 MAX_WORKERS = 5
 
-# Load manifest at module level so run_one (called in worker processes) can see it
+# module level so worker processes can read it
 manifest = {}
 with open(os.path.join(SWEEP_DIR, "configs.csv")) as f:
     for row in csv.DictReader(f):
@@ -59,7 +59,7 @@ def run_one(config_id, seed):
 
 if __name__ == "__main__":
 
-    # ── Load sweep CSVs ───────────────────────────────────────────────────────
+    # Load sweep CSVs
 
     per_run = {}
     for path in glob.glob(os.path.join(SWEEP_DIR, "config_*_seed_*.csv")):
@@ -86,7 +86,7 @@ if __name__ == "__main__":
             n_seeds    = len(runs),
         )
 
-    # ── Write summary CSV ─────────────────────────────────────────────────────
+    # Write summary CSV
 
     summary_path = os.path.join(ROOT, "classic_sweep_summary.csv")
     with open(summary_path, "w", newline="") as f:
@@ -99,7 +99,7 @@ if __name__ == "__main__":
             w.writerow(row)
     print(f"Summary → {summary_path}")
 
-    # ── Print ranking ─────────────────────────────────────────────────────────
+    # Print ranking
 
     ranked = sorted(by_config, key=lambda c: -by_config[c]["mean_total"])
 
@@ -117,7 +117,7 @@ if __name__ == "__main__":
     top5_ids = ranked[:5]
     print(f"\nTop-5 config IDs: {top5_ids}")
 
-    # ── Run top-5 × 5 seeds ───────────────────────────────────────────────────
+    # Run top-5 × 5 seeds
 
     os.makedirs(TOP5_DIR, exist_ok=True)
     jobs  = [(cid, seed) for cid in top5_ids for seed in SEEDS]

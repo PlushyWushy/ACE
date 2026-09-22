@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the ACE paper figures: one per dataset, classic vs ACE in each."""
+"""Generate the paper figures in figures/."""
 import csv, os, sys
 import numpy as np
 import matplotlib
@@ -11,11 +11,11 @@ TRAJ = os.path.join(ROOT, "results", "bandit", "traj")
 OUT = os.path.join(ROOT, "figures")
 os.makedirs(OUT, exist_ok=True)
 
-# entity -> colour, fixed across every figure (validated: dataviz six checks, light mode)
-C_CLASSIC = "#2a78d6"   # slot 1 blue
-C_ACE     = "#eb6834"   # slot 2 orange
-C_ACH     = "#1baf7a"   # slot 3 aqua   (ACh-only)
-C_NE      = "#4a3aa7"   # slot 7 violet (NE-only)
+# one colour per method, shared by all figures
+C_CLASSIC = "#2a78d6"
+C_ACE     = "#eb6834"
+C_ACH     = "#1baf7a"   # ACh-only
+C_NE      = "#4a3aa7"   # NE-only
 SURFACE   = "#fcfcfb"
 INK       = "#0b0b0b"
 INK2      = "#52514e"
@@ -97,7 +97,7 @@ def load_cartpole(root, tag, seeds=range(1, 21), col="reward", need=10000):
 
 
 def load_agg(path, group):
-    """pre-aggregated per-episode mean/std curve"""
+    """Per-episode mean/std curve from a pre-aggregated CSV."""
     m, s = [], []
     for r in csv.DictReader(open(path)):
         if r["group"] == group:

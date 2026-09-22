@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
 """
-Figures for the corrected Switch Bandit runs.
-
-Follows the conventions already used in data_src/plot_*_avg_reward_rate.py:
-non-overlapping 50-episode windows, mean +/- 1 SD shading across seeds, switch
-marked with a red dashed line, 150 dpi, and a stats CSV written alongside each
-figure.
-
-Produces
-    reward_rate.png        (a) ACE vs classic   (b) ACE vs the two ablations
-    neuromodulators.png    ACh and sigma_NE traces, mean +/- 1 SD across seeds
-    *_stats.csv            per-window mean/SD behind each panel
+Diagnostic plots for results/bandit/runs (50-episode windows, mean +/- 1 SD):
+reward_rate.png, neuromodulators.png, and a stats CSV for each.
 """
 
 import glob
@@ -48,7 +39,7 @@ def load(tag, column):
 
 
 def windowed(arr, window=WINDOW, scale=100.0):
-    """Non-overlapping window means -> (n_seeds, n_windows), matching data_src."""
+    """Non-overlapping window means -> (n_seeds, n_windows)."""
     m = (arr.shape[1] // window) * window
     return arr[:, :m].reshape(arr.shape[0], -1, window).mean(axis=2) * scale
 

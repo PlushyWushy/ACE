@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""Re-run ace_variants.py's gradual/multiswitch arms, logging per-episode traces.
-
-Replicates ace_variants.run() call-for-call (identical RNG consumption) so the
-aggregate numbers reproduce exactly; the only addition is per-episode logging.
+"""Rerun ace_variants.py's gradual/multiswitch runs with per-episode logging
+(same RNG sequence, so results match) and save them to results/bandit/traj.
 """
 import argparse, concurrent.futures as cf, os, sys
 import numpy as np, torch

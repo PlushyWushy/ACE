@@ -21,8 +21,8 @@ HYPERPARAMETERS = {
 
 NUM_RANDOM_CONFIGS = 100
 SEEDS = [1, 2, 3]
-EPISODES = 10000 # Using a smaller number of episodes for the random search. Will adjust if necessary.
-SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flagship.py")
+EPISODES = 10000
+SCRIPT_PATH =os.path.join(os.path.dirname(os.path.abspath(__file__)), "flagship.py")
 RESULTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole"))
 
 def generate_random_configs(grid, num_configs):
@@ -44,11 +44,8 @@ def run_experiment(config, seed, config_id):
         cmd.extend([f"--{k}", str(v)])
         
     try:
-        # We need to capture the reward to evaluate the config.
-        # Assuming the script prints the final average reward or we parse it from saved CSVs.
-        # flagship.py writes each run's CSV into out_dir (results/cartpole/hyperparam_search/)
+        # results are read back from the CSVs in out_dir
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # return the config id and seed so we can look up the result
         return config_id, seed, True, ""
     except subprocess.CalledProcessError as e:
         return config_id, seed, False, e.stderr
@@ -65,8 +62,6 @@ def main():
     
     results = defaultdict(list)
     
-    # We use ThreadPoolExecutor to run tasks in parallel.
-    # Because these are RL tasks, they might be CPU bound, but we'll try 8 workers.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         future_to_task = {executor.submit(run_experiment, *task): task for task in tasks}
         
@@ -79,7 +74,7 @@ def main():
                 
     print("Sweep complete. Please aggregate results to find the best configs.")
     
-    # Save the configs used so we know which ID maps to which parameters
+    # config_id -> parameters
     with open(os.path.join(RESULTS, 'random_search_configs.csv'), 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['config_id'] + list(HYPERPARAMETERS.keys()))
         writer.writeheader()

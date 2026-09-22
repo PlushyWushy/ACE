@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
-Plot per-episode average reward for NE and ACh successful CartPole ablations
-separately on their own, producing exactly 2 standalone graphs:
-- results/cartpole/only_ne_avg_reward_rate.png
-- results/cartpole/only_ach_avg_reward_rate.png
-
-And saves aggregation stats in:
-- results/cartpole/ablation_comparison_stats.csv
+Average the CartPole ablation runs per episode: writes only_ne / only_ach
+reward plots and ablation_comparison_stats.csv (used by fig_ablation) to
+results/cartpole.
 """
 
 from pathlib import Path
@@ -65,7 +61,7 @@ def plot_single_ablation(data, color, out_path, title):
     # Plot mean
     plt.plot(episodes, smoothed_mean, color=color, lw=2, label='Mean reward')
     
-    # Plot standard deviation strictly clipped to [0, 500] for CartPole
+    # SD band clipped to CartPole's [0, 500] range
     lower_bound = np.clip(smoothed_mean - smoothed_std, 0, 500)
     upper_bound = np.clip(smoothed_mean + smoothed_std, 0, 500)
     plt.fill_between(episodes, lower_bound, upper_bound, color=color, alpha=0.25, label='±1 std')
@@ -129,7 +125,7 @@ def main():
         late_mean = raw_mean[-1000:].mean()
         print(f"Group: {gname:<15} | Average Reward: {total_mean:.2f} | Late Episode Reward (last 1k): {late_mean:.2f}")
 
-        # Plot standalone figure
+        # Plot
         plot_single_ablation(
             data=aligned_runs,
             color=info['color'],
@@ -137,7 +133,7 @@ def main():
             title=info['title']
         )
 
-    # Save CSV Stats
+    # Save stats
     with OUT_CSV.open('w', newline='') as fh:
         writer = csv.DictWriter(fh, fieldnames=['group', 'episode', 'mean_reward', 'std_reward'])
         writer.writeheader()

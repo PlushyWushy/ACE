@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 """
-Run the corrected Switch Bandit experiment: ACE, classic, and two ablations.
+Run the Switch Bandit experiment: ACE and classic, then the two ablations with
+each modulator frozen at full ACE's mean value.
 
-The ablations are LEVEL-MATCHED, which the originals were not.  In
-sb/run_ablations.py the "NE constant" arm used base_noise = 1.5 while full ACE
-operated at sigma_NE ~ 0.365 — so that arm changed the *level* of exploration
-4x as well as removing its adaptivity, and the two effects cannot be separated.
-
-Here phase 1 runs full ACE and measures the mean ACh and mean sigma_NE it
-actually used.  Phase 2 freezes each modulator at that measured mean.  The only
-thing that then differs between full ACE and an ablation is whether the signal
-adapts — which is the question the ablation is supposed to answer.
-
-    python3 run_batch.py                # all four conditions, 20 seeds
-    python3 run_batch.py --seeds 5      # quick smoke test
+    python src/bandit/run_batch.py              # 20 seeds
+    python src/bandit/run_batch.py --seeds 5
 """
 
 import argparse
@@ -28,9 +19,7 @@ import ace_sb
 HERE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "bandit"))
 RUNS = os.path.join(HERE, "runs")
 
-# classic baseline: both modulators off.  BASE_LR 1e-2 is the value the paper
-# reports for the bandit; BASE_NOISE 1.0 matches sb/classic.py, which the paper
-# never states — see README.
+# classic baseline: both modulators off
 CLASSIC_NOISE = 1.0
 CLASSIC_LR = 1e-2
 
@@ -65,7 +54,7 @@ def main():
                            BASE_NOISE=CLASSIC_NOISE, BASE_LR=CLASSIC_LR)
                       for s in seeds], a.workers)
 
-    # measure ACE's realised operating points, per episode across all seeds
+    # mean ACh / sigma_NE used by full ACE, for the ablations
     import pandas as pd
     ach, ne = [], []
     for s in seeds:

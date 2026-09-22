@@ -16,7 +16,7 @@ def run_experiment(script_path, seed, episodes):
     start_time = time.time()
     
     try:
-        # Run and capture output to prevent terminal flooding
+        # capture output so parallel runs don't flood the terminal
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         elapsed = time.time() - start_time
         return f"Finished: {name} | Seed: {seed} | Time: {elapsed:.1f}s"
@@ -39,7 +39,6 @@ def main():
             
     print(f"Queueing {len(tasks)} runs...")
     
-    # Using 4 workers for a balance of speed and stability
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_task = {executor.submit(run_experiment, *task): task for task in tasks}
         for future in concurrent.futures.as_completed(future_to_task):

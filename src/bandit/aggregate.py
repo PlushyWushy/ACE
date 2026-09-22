@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """
-Aggregate results/bandit/runs into paper-ready numbers.
+Summarise results/bandit/runs: totals (+1/-1 reward), post-switch totals, SD
+(ddof=0), paired t-test / Wilcoxon vs ACE, and the ACh / sigma_NE ranges.
 
-Reports totals in the paper's +1/-1 convention (2 * optimal_count - n_episodes),
-population SD (ddof=0, matching the paper), paired t-test and Wilcoxon p-values,
-and — the part that was missing before — the realised modulation range of ACh
-and sigma_NE in every condition.
-
-    python3 aggregate.py
+    python src/bandit/aggregate.py
 """
 
 import glob

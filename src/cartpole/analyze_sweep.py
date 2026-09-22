@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """
-Hyperparameter sweep analysis for the CartPole switch experiment.
-
-Produces:
-  1. sweep_summary.csv        — per-config statistics across all 100 configs × 3 seeds
-  2. top10_summary.csv        — per-config statistics for top-10 validation (5 seeds each)
-  3. hyperparam_robustness.png — scatterplot: mean total reward vs mean post-switch reward
+Summarise the ACE hyperparameter sweep (100 configs x 3 seeds) and the top-10
+revalidation (5 seeds): writes sweep_summary.csv, top10_summary.csv and
+hyperparam_robustness.png to results/cartpole.
 """
 
 import csv
@@ -26,7 +23,7 @@ SWITCH_EP   = 5000
 VALID_SEEDS = set(range(1, 21))
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# Helpers
 
 def load_rewards(path):
     with open(path) as f:
@@ -44,7 +41,7 @@ def episode_stats(rewards, switch=SWITCH_EP):
     )
 
 
-# ── Load sweep results (100 configs × 3 seeds) ───────────────────────────────
+# Load sweep results (100 configs × 3 seeds)
 
 print("Loading sweep results …")
 sweep_per_run = {}
@@ -70,7 +67,7 @@ for cid in config_ids:
         "n_seeds"    : len(runs),
     }
 
-# ── Load top-10 validation results (5 seeds) ─────────────────────────────────
+# Load top-10 validation results (5 seeds)
 
 print("Loading top-10 validation results …")
 top10_per_run = {}
@@ -93,7 +90,7 @@ for cid in top10_config_ids:
         "n_seeds"    : len(runs),
     }
 
-# ── Load classic CartPole baseline (seeds 1–20 only) ─────────────────────────
+# Load classic CartPole baseline (seeds 1–20 only)
 
 print("Loading classic CartPole runs (seeds 1–20) …")
 classic_rewards_all = []
@@ -119,7 +116,7 @@ print(f"  Classic baseline: {len(classic_rewards_all)} seeds | "
       f"total={classic_mean:.1f}±{classic_std:.1f} | "
       f"post={classic_mean_post:.1f}±{classic_std_post:.1f}")
 
-# ── Write sweep_summary.csv ───────────────────────────────────────────────────
+# Write sweep_summary.csv
 
 sweep_csv = os.path.join(ROOT, "sweep_summary.csv")
 with open(sweep_csv, "w", newline="") as f:
@@ -129,7 +126,7 @@ with open(sweep_csv, "w", newline="") as f:
         w.writerow({"config_id": cid, **sweep_by_config[cid]})
 print(f"Saved {sweep_csv}")
 
-# ── Write top10_summary.csv ───────────────────────────────────────────────────
+# Write top10_summary.csv
 
 top10_csv = os.path.join(ROOT, "top10_summary.csv")
 with open(top10_csv, "w", newline="") as f:
@@ -139,7 +136,7 @@ with open(top10_csv, "w", newline="") as f:
         w.writerow({"config_id": cid, **top10_by_config[cid]})
 print(f"Saved {top10_csv}")
 
-# ── Console summary ───────────────────────────────────────────────────────────
+# Console summary
 
 all_totals = [v["mean_total"] for v in sweep_by_config.values()]
 all_posts  = [v["mean_post"]  for v in sweep_by_config.values()]
@@ -160,7 +157,7 @@ for cid in sorted(top10_by_config, key=lambda c: -top10_by_config[c]["mean_total
     v = top10_by_config[cid]
     print(f"  {cid:>8}  {v['mean_total']:>7.1f}±{v['std_total']:>6.1f}  {v['mean_post']:>7.1f}±{v['std_post']:>6.1f}")
 
-# ── Figure: scatterplot — mean total (x) vs mean post-switch (y) ──────────────
+# Scatter: mean total vs mean post-switch
 
 fig, ax = plt.subplots(figsize=(7, 5.5))
 
