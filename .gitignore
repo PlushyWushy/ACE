@@ -26,6 +26,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.venv/
+.venv*/
 
 # Experiment Results & Data
 
