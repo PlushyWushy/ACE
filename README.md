@@ -8,8 +8,8 @@ There have been multiple upgrades made recently, mainly to make the tests more b
 ## Experiments
 
 ### CartPole Switch Task
-### Switch Bandit Task
-### Switch Lunar Landing Task (still in progress)
+### Switch Bandit variations 
+### Acrobot Task
 
 
 
