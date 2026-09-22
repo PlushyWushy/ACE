@@ -42,11 +42,11 @@ BASE_NOISE = 1
 # NE logistic mapping params (for unexpected uncertainty / novelty)
 NE_MAX = 3
 NE_K = 0.2
-NE_CENTER = 15
+NE_CENTER = 1500000000000000000000000000
 
 # ACh logistic mapping params (for expected uncertainty / variance)
 ACH_MAX = 1
-ACH_K = 10 
+ACH_K = 10
 ACH_CENTER = 5
 
 # Surprise EMA
@@ -308,11 +308,11 @@ def train(args):
         # DECOUPLED NEUROMODULATION
         # =====================================================================
         # NE driven by unexpected uncertainty (novelty)
-        current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER, avg_unexpected, args.base_noise)
+        current_ne = logistic_drive(args.ne_max, args.ne_k, args.ne_center, avg_unexpected, args.base_noise)
         current_ne = min(current_ne, 5.0)
 
         # ACh uses its own logistic (expected uncertainty -> modulatory signal).
-        current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
+        current_ach = logistic_drive(args.ach_max, args.ach_k, args.ach_center, avg_expected, args.base_lr)
 
         td_sum = 0.0
         td_count = 0
@@ -405,9 +405,9 @@ def train(args):
             avg_unexpected = UNEXP_SURPRISE_DECAY * avg_unexpected + td_novelty #(1.0 - UNEXP_SURPRISE_DECAY) * td_novelty
 
             # Update dynamics for next step
-            current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER, avg_unexpected, args.base_noise)
+            current_ne = logistic_drive(args.ne_max, args.ne_k, args.ne_center, avg_unexpected, args.base_noise)
             current_ne = min(current_ne, 5.0)
-            current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
+            current_ach = logistic_drive(args.ach_max, args.ach_k, args.ach_center, avg_expected, args.base_lr)
 
             obs_t = next_obs_t
             total_reward += float(reward)
@@ -476,13 +476,18 @@ def train(args):
     fig.tight_layout()
     plt.title("Switch CartPole - Decoupled Uncertainty (TD-LTP Critic, Actor LR Decay)")
 
-    out_dir = f"icarussecondpaper/runs/{args.seed}_flagship" if args.seed is not None else "cartpole/runs/noseed_critic_ach_decoupled_tdlp_actor_lr_decay"
+    if getattr(args, 'out_dir', None):
+        out_dir = args.out_dir
+    else:
+        out_dir = f"cartpole_successful/ach_only_ablation_runs/{args.seed}_flagship" if args.seed is not None else "cartpole/runs/noseed_critic_ach_decoupled_tdlp_actor_lr_decay"
     os.makedirs(out_dir, exist_ok=True)
 
-    png_path = os.path.join(out_dir, f"{args.seed}_flagship.png")
+    file_prefix = f"config_{args.config_id}_seed_{args.seed}" if getattr(args, 'config_id', None) is not None else f"{args.seed}_flagship"
+
+    png_path = os.path.join(out_dir, f"{file_prefix}.png")
     fig.savefig(png_path, dpi=150, bbox_inches="tight")
 
-    csv_path = os.path.join(out_dir, f"{args.seed}_flagship.csv")
+    csv_path = os.path.join(out_dir, f"{file_prefix}.csv")
     with open(csv_path, "w") as fh:
         fh.write("episode,reward,unexpected_uncertainty,expected_uncertainty,mean_variance,mean_td_error_sq,mean_delta_var,mean_actor_lr,mean_abs_td\n")
         for i, (r, u, e, v, td2, dv, alr, td) in enumerate(zip(reward_history, unexpected_history, expected_history, variance_history, td2_history, delta_var_history, actor_lr_history, td_history)):
@@ -496,10 +501,16 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
+    parser.add_argument("--config_id", type=int, default=None, help="Configuration ID for hyperparameter sweeps")
+    parser.add_argument("--out_dir", type=str, default=None, help="Output directory for results")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
     parser.add_argument("--base_noise", type=float, default=BASE_NOISE)
     parser.add_argument("--ne_max", type=float, default=NE_MAX)
     parser.add_argument("--ach_max", type=float, default=ACH_MAX)
+    parser.add_argument("--ne_k", type=float, default=NE_K)
+    parser.add_argument("--ne_center", type=float, default=NE_CENTER)
+    parser.add_argument("--ach_k", type=float, default=ACH_K)
+    parser.add_argument("--ach_center", type=float, default=ACH_CENTER)
     parser.add_argument("--critic_base_lr", type=float, default=CRITIC_BASE_LR)
     parser.add_argument("--actor_lr_decay", type=float, default=ACTOR_LR_DECAY)
     parser.add_argument("--actor_lr_boost", type=float, default=ACTOR_LR_BOOST)
@@ -508,5 +519,8 @@ if __name__ == "__main__":
     parser.add_argument("--td_fast_alpha", type=float, default=TD_FAST_ALPHA)
     parser.add_argument("--td_slow_alpha", type=float, default=TD_SLOW_ALPHA)
     args = parser.parse_args()
+
+    if args.actor_lr_min < args.base_lr:
+        args.base_lr = args.actor_lr_min
 
     train(args)

@@ -9,6 +9,7 @@ def run_experiment(script_path, seed, episodes):
         script_path,
         "--seed", str(seed),
         "--episodes", str(episodes)
+        
     ]
     name = os.path.basename(script_path).replace(".py", "")
     print(f"Starting: {name} | Seed: {seed}")
@@ -25,7 +26,7 @@ def run_experiment(script_path, seed, episodes):
 def main():
     base_dir = "/Users/a../Desktop/Icarus/cartpole_successful"
     scripts = [
-        ("classic.py", 10000)
+        ("flagship.py", 10000)
     ]
     
     seeds = range(1, 21)

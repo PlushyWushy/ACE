@@ -5,7 +5,7 @@ import time
 
 def run_experiment(script_path, seed, episodes):
     cmd = [
-        "python3",
+        "python",
         script_path,
         "--seed", str(seed),
         "--episodes", str(episodes)
@@ -25,7 +25,7 @@ def run_experiment(script_path, seed, episodes):
 def main():
     base_dir = "/Users/a../Desktop/Icarus/sb_gradual"
     scripts = [
-        ("icarus.py", 20000),
+        ("icarus_upgraded.py", 20000),
         ("classic.py", 20000)
     ]
     

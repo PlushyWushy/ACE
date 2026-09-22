@@ -1,0 +1,63 @@
+run,seed,type,post_switch_reward,n_rows
+10_classic,10,classic,3781.000000,20000
+10_icarus,10,ACE (old),9901.000000,20000
+10_icarus_upgraded,10,ACE,7706.000000,20000
+11_classic,11,classic,5010.000000,20000
+11_icarus,11,ACE (old),9473.000000,20000
+11_icarus_upgraded,11,ACE,7265.000000,20000
+12_classic,12,classic,2055.000000,20000
+12_icarus,12,ACE (old),9379.000000,20000
+12_icarus_upgraded,12,ACE,7309.000000,20000
+13_classic,13,classic,3334.000000,20000
+13_icarus,13,ACE (old),9789.000000,20000
+13_icarus_upgraded,13,ACE,8166.000000,20000
+14_classic,14,classic,5445.000000,20000
+14_icarus,14,ACE (old),9909.000000,20000
+14_icarus_upgraded,14,ACE,6343.000000,20000
+15_classic,15,classic,5334.000000,20000
+15_icarus,15,ACE (old),9623.000000,20000
+15_icarus_upgraded,15,ACE,6715.000000,20000
+16_classic,16,classic,5024.000000,20000
+16_icarus,16,ACE (old),9884.000000,20000
+16_icarus_upgraded,16,ACE,7776.000000,20000
+17_classic,17,classic,1963.000000,20000
+17_icarus,17,ACE (old),9692.000000,20000
+17_icarus_upgraded,17,ACE,7475.000000,20000
+18_classic,18,classic,4201.000000,20000
+18_icarus,18,ACE (old),9887.000000,20000
+18_icarus_upgraded,18,ACE,6798.000000,20000
+19_classic,19,classic,4276.000000,20000
+19_icarus,19,ACE (old),9533.000000,20000
+19_icarus_upgraded,19,ACE,7552.000000,20000
+1_classic,1,classic,4567.000000,20000
+1_icarus,1,ACE (old),8751.000000,20000
+1_icarus_upgraded,1,ACE,5983.000000,20000
+20_classic,20,classic,3281.000000,20000
+20_icarus,20,ACE (old),9875.000000,20000
+20_icarus_upgraded,20,ACE,7695.000000,20000
+2_classic,2,classic,5179.000000,20000
+2_icarus,2,ACE (old),9614.000000,20000
+2_icarus_upgraded,2,ACE,6246.000000,20000
+3_classic,3,classic,5145.000000,20000
+3_icarus,3,ACE (old),9653.000000,20000
+3_icarus_upgraded,3,ACE,7654.000000,20000
+4_classic,4,classic,4966.000000,20000
+4_icarus,4,ACE (old),9846.000000,20000
+4_icarus_upgraded,4,ACE,6688.000000,20000
+5_classic,5,classic,2507.000000,20000
+5_icarus,5,ACE (old),9663.000000,20000
+5_icarus_upgraded,5,ACE,7684.000000,20000
+6_classic,6,classic,3335.000000,20000
+6_icarus,6,ACE (old),9864.000000,20000
+6_icarus_upgraded,6,ACE,6210.000000,20000
+7_classic,7,classic,2628.000000,20000
+7_icarus,7,ACE (old),9892.000000,20000
+7_icarus_upgraded,7,ACE,7734.000000,20000
+8_classic,8,classic,3292.000000,20000
+8_icarus,8,ACE (old),9870.000000,20000
+8_icarus_upgraded,8,ACE,7041.000000,20000
+9_classic,9,classic,5470.000000,20000
+9_icarus,9,ACE (old),9597.000000,20000
+9_icarus_upgraded,9,ACE,7736.000000,20000
+noseed_icarus,noseed,ACE (old),9629.000000,20000
+noseed_icarus_upgraded,noseed,ACE,7007.000000,20000

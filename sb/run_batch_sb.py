@@ -25,8 +25,8 @@ def run_experiment(script_path, seed, episodes):
 def main():
     base_dir = "/Users/a../Desktop/Icarus/sb"
     scripts = [
-        ("icarus_upgraded.py", 20000),
-        ("classic.py", 20000)
+        ("icarus_upgraded_multiswitch.py", 30000),
+        ("classic_multiswitch.py", 30000)
     ]
     
     seeds = range(1, 21)

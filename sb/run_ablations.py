@@ -27,7 +27,7 @@ def run_experiment(seed, ne_max, ach_max, base_noise, base_lr, tag, episodes=200
 
 def main():
     # Ensure we are in the correct directory
-    os.chdir("/Users/chairstands/Desktop/Icarus/sb")
+    #os.chdir("/Users/chairstands/Desktop/Icarus/sb")
     
     tasks = []
     seeds = range(1, 21)
@@ -38,7 +38,7 @@ def main():
         
     # Only ACh modulation (NE constant at 1.5)
     for seed in seeds:
-        tasks.append((seed, 0.0, 1.0, 1.5, 1e-2, "only_ach"))
+        tasks.append((seed, 0.0, 1.0, 0.36, 1e-2, "only_ach"))
             
     print(f"Queueing {len(tasks)} runs...")
     

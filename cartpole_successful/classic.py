@@ -486,13 +486,18 @@ def train(args):
     fig.tight_layout()
     plt.title("Switch CartPole - Decoupled Uncertainty (TD-LTP Critic, Actor LR Decay)")
 
-    out_dir = f"icarussecondpaper/runs/{args.seed}_classic" if args.seed is not None else "cartpole/runs/noseed_critic_ach_decoupled_tdlp_actor_lr_decay"
+    if args.out_dir:
+        out_dir = args.out_dir
+    else:
+        out_dir = f"icarussecondpaper/runs/{args.seed}_classic" if args.seed is not None else "cartpole/runs/noseed_critic_ach_decoupled_tdlp_actor_lr_decay"
     os.makedirs(out_dir, exist_ok=True)
 
-    png_path = os.path.join(out_dir, f"{args.seed}_classic.png")
+    stem = f"config_{args.config_id}_seed_{args.seed}" if args.config_id is not None else f"{args.seed}_classic"
+
+    png_path = os.path.join(out_dir, f"{stem}.png")
     fig.savefig(png_path, dpi=150, bbox_inches="tight")
 
-    csv_path = os.path.join(out_dir, f"{args.seed}_classic.csv")
+    csv_path = os.path.join(out_dir, f"{stem}.csv")
     with open(csv_path, "w") as fh:
         fh.write("episode,reward,unexpected_uncertainty,expected_uncertainty,mean_variance,mean_td_error_sq,mean_delta_var,mean_actor_lr,mean_abs_td\n")
         for i, (r, u, e, v, td2, dv, alr, td) in enumerate(zip(reward_history, unexpected_history, expected_history, variance_history, td2_history, delta_var_history, actor_lr_history, td_history)):
@@ -517,6 +522,8 @@ if __name__ == "__main__":
     parser.add_argument("--actor_lr_max", type=float, default=ACTOR_LR_MAX)
     parser.add_argument("--td_fast_alpha", type=float, default=TD_FAST_ALPHA)
     parser.add_argument("--td_slow_alpha", type=float, default=TD_SLOW_ALPHA)
+    parser.add_argument("--out_dir", type=str, default=None, help="Override output directory")
+    parser.add_argument("--config_id", type=int, default=None, help="Config ID for sweep runs")
     args = parser.parse_args()
 
     train(args)

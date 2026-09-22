@@ -66,6 +66,16 @@ PC_GRID_SIZES = [5, 5, 5, 5, 4, 4]   # cos1, sin1, cos2, sin2, w1, w2
 # Toggle neuromodulation (False for baseline comparison)
 USE_NEUROMOD = False
 
+def logistic_drive(max_val: float, k: float, center: float,
+                   signal: float, base: float) -> float:
+    z = k * (signal - center)
+    if z >= 700:
+        return max_val + base
+    if z <= -700:
+        return base
+    return max_val / (1.0 + math.exp(-z)) + base
+
+
 # ---------------------------------------------------------------------------
 # Place Cell Encoder & Surrogate Actor/Critic
 # ---------------------------------------------------------------------------
@@ -214,7 +224,7 @@ def train(episodes=TOTAL_EPISODES, seed: int | None = None, switch_ep=SWITCH_EP)
     critic = SurrogateCritic(encoder.n_neurons).to(device)
 
     actor_optim = optim.SGD([actor.w], lr=1.0)
-    critic_optim = optim.Adam(critic.parameters(), lr=CRICIT_BASE_LR if 'CRICIT_BASE_LR' in globals() else CRITIC_BASE_LR)
+    critic_optim = optim.Adam(critic.parameters(), lr=CRITIC_BASE_LR)
 
     print(f"Start Surrogate Switch Acrobot. Episodes: {episodes}")
 

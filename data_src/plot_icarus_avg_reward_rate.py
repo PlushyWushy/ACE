@@ -90,13 +90,13 @@ def main():
     # plot
     plt.figure(figsize=(10,6))
     plt.plot(episodes, mean, color='tab:blue', lw=2, label='Mean reward rate')
-    plt.fill_between(episodes, mean - std, mean + std, color='tab:blue', alpha=0.25, label='±1 std')
+    plt.fill_between(episodes, np.clip(mean - std, 0, 100), np.clip(mean + std, 0, 100), color='tab:blue', alpha=0.25, label='±1 std')
     plt.axvline(x=10000, color='tab:red', linestyle='--', label='Switch')
     plt.xlabel('Episode')
     plt.ylabel('Percent Optimal (%)')
     plt.title('ACE - Average Reward Rate across seeds (±STD)')
     plt.grid(True, alpha=0.3)
-    plt.ylim(0, 105)
+    plt.ylim(-5, 105)
     plt.legend()
 
     OUT_PNG.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,7 @@
+CARTPOLE ABLATION PAIRWISE SUMMARY
+ach_only: n=20, mean_ablation=138.3727, mean_normal=148.7996, mean_diff=-10.4269, t_stat=-1.2594
+ne_only: n=20, mean_ablation=67.9582, mean_normal=148.7996, mean_diff=-80.8413, t_stat=-12.4774
+
+SWITCH BANDIT PAIRWISE SUMMARY VS CLASSIC
+only_ach: n=20, mean_ablation=13145.35, mean_classic=13942.90, mean_diff=-797.55, t_stat=-2.4899
+only_ne: n=20, mean_ablation=17024.40, mean_classic=13942.90, mean_diff=3081.50, t_stat=9.8811

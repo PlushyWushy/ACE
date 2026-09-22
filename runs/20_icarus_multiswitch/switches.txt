@@ -1,0 +1,5 @@
+arms: 4
+initial_optimal: 0
+ep 10000 -> arm 1
+ep 20000 -> arm 2
+ep 30000 -> arm 3
