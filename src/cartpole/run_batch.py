@@ -24,7 +24,7 @@ def run_experiment(script_path, seed, episodes):
         return f"FAILED: {name} | Seed: {seed} | Error: {e.stderr}"
 
 def main():
-    base_dir = "/Users/a../Desktop/Icarus/cartpole_successful"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     scripts = [
         ("flagship.py", 10000)
     ]

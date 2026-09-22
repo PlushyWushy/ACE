@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Train the top 10 sweep configurations (ranked by mean total reward across all episodes)
-for 5 seeds each, using cartpole_successful/flagship.py.
+for 5 seeds each, using src/cartpole/flagship.py.
 
 Top 10 configs (from random_search_configs.csv, ranked by mean reward over 10k episodes):
   Rank  Config  Mean reward
@@ -23,7 +23,7 @@ import subprocess
 import concurrent.futures
 
 SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flagship.py")
-OUT_DIR     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "top10_runs")
+OUT_DIR     = os.path.join(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole")), "top10_runs")
 SEEDS       = [1, 2, 3, 4, 5]
 EPISODES    = 10000
 MAX_WORKERS = 6

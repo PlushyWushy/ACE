@@ -71,6 +71,8 @@ ACH_CENTER = 0.5                # was 1.5
 
 NE_MAX = 0.4                    # was 2.0
 NE_K = 340.0                    # was 1.0
+RUNS = os.path.join(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "bandit")), "runs")
+
 NE_CENTER = 0.006               # was ACH_CENTER (1.5), and aliased to it
 
 # Surprise trace hyperparameters (unchanged)
@@ -173,7 +175,7 @@ def logistic_drive(max_val: float, k: float, center: float, signal: float, base:
     return max_val / (1.0 + math.exp(-z)) + base
 
 
-def train(episodes=20000, seed=SEED, out_root="runs", tag="ace", quiet=False, **kw):
+def train(episodes=20000, seed=SEED, out_root=RUNS, tag="ace", quiet=False, **kw):
     set_global_seed(seed)
     device = torch.device("cpu")
 
@@ -286,7 +288,7 @@ if __name__ == "__main__":
     ap.add_argument("--episodes", type=int, default=20000)
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--tag", type=str, default="ace")
-    ap.add_argument("--out_root", type=str, default="runs")
+    ap.add_argument("--out_root", type=str, default=RUNS)
     ap.add_argument("--ne_max", type=float, default=NE_MAX)
     ap.add_argument("--ne_k", type=float, default=NE_K)
     ap.add_argument("--ne_center", type=float, default=NE_CENTER)

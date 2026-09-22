@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-ROOT        = os.path.dirname(os.path.abspath(__file__))
+ROOT        = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole"))
 SWEEP_DIR   = os.path.join(ROOT, "hyperparam_search")
 TOP10_DIR   = os.path.join(ROOT, "top10_runs")
 CLASSIC_DIR = os.path.join(ROOT, "runs_saved")

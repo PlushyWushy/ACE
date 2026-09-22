@@ -2,7 +2,7 @@
 """
 Grid-search over BASE_LR × BASE_NOISE for classic.py.
 3 × 3 = 9 configs, 3 seeds each → 27 runs total.
-Outputs CSVs to cartpole_successful/classic_hyperparam_search/config_<id>_seed_<seed>.csv
+Outputs CSVs to results/cartpole/classic_hyperparam_search/config_<id>_seed_<seed>.csv
 """
 
 import os
@@ -13,7 +13,7 @@ import itertools
 import csv
 
 SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "classic.py")
-OUT_DIR     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "classic_hyperparam_search")
+OUT_DIR     = os.path.join(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole")), "classic_hyperparam_search")
 SEEDS       = [1, 2, 3]
 EPISODES    = 10000
 MAX_WORKERS = 6

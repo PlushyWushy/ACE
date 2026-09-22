@@ -6,9 +6,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-ROOT = "/Users/a../Desktop/Icarus"
-TRAJ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "traj")
-OUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # ../ = figures/
+ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+TRAJ = os.path.join(ROOT, "results", "bandit", "traj")
+OUT = os.path.join(ROOT, "figures")
 os.makedirs(OUT, exist_ok=True)
 
 # entity -> colour, fixed across every figure (validated: dataviz six checks, light mode)
@@ -73,7 +73,7 @@ def switch_line(ax, xs, label=True):
 def load_fixed_sb(cond, seeds=range(1, 21)):
     out = []
     for s in seeds:
-        p = f"{ROOT}/fixed_sb/runs/{s}_{cond}/data.csv"
+        p = f"{ROOT}/results/bandit/runs/{s}_{cond}/data.csv"
         out.append([int(r["is_optimal"]) for r in csv.DictReader(open(p))])
     return np.array(out, dtype=float)
 
@@ -144,7 +144,7 @@ def main():
                anchor=(0.05, 0.02))
 
     # 4 ── switch cartpole
-    rs = f"{ROOT}/cartpole_successful/runs_saved"
+    rs = f"{ROOT}/results/cartpole/runs_saved"
     cls = load_cartpole(rs, "classic"); ace = load_cartpole(rs, "flagship")
     fig, ax = plt.subplots(figsize=(3.4, 2.0))
     for mat, c, lab in [(cls, C_CLASSIC, "Classic RSTDP"), (ace, C_ACE, "ACE")]:
@@ -176,7 +176,7 @@ def main():
     b = axes[1]
     x, m, s = window(ace, 50)
     band(b, x, m, s, C_ACE, "Full ACE")
-    agg = f"{ROOT}/cartpole_successful/ablation_comparison_stats.csv"
+    agg = f"{ROOT}/results/cartpole/ablation_comparison_stats.csv"
     for group, c, lab in [("ACE (Only ACh)", C_ACH, "ACh-only (NE frozen)"),
                           ("ACE (Only NE)", C_NE, "NE-only (ACh frozen)")]:
         mm, ss = load_agg(agg, group)
@@ -194,7 +194,7 @@ def main():
     # 6 ── hyperparameter sweeps
     def rows(p):
         return list(csv.DictReader(open(p)))
-    cs = f"{ROOT}/cartpole_successful"
+    cs = f"{ROOT}/results/cartpole"
     ace_s = rows(f"{cs}/sweep_summary.csv")
     ace_t = rows(f"{cs}/top10_summary.csv")
     cls_s = rows(f"{cs}/classic_sweep_summary.csv")

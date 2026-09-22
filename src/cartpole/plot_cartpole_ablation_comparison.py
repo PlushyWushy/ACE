@@ -2,11 +2,11 @@
 """
 Plot per-episode average reward for NE and ACh successful CartPole ablations
 separately on their own, producing exactly 2 standalone graphs:
-- cartpole_successful/only_ne_avg_reward_rate.png
-- cartpole_successful/only_ach_avg_reward_rate.png
+- results/cartpole/only_ne_avg_reward_rate.png
+- results/cartpole/only_ach_avg_reward_rate.png
 
 And saves aggregation stats in:
-- cartpole_successful/ablation_comparison_stats.csv
+- results/cartpole/ablation_comparison_stats.csv
 """
 
 from pathlib import Path
@@ -15,13 +15,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Paths
-BASE_DIR = Path("/Users/a../Desktop/Icarus")
-NE_DIR = BASE_DIR / "cartpole_successful/ne_only_ablation_runs"
-ACH_DIR = BASE_DIR / "cartpole_successful/ach_only_ablation_runs"
+BASE_DIR = Path(__file__).resolve().parents[2] / "results"
+NE_DIR = BASE_DIR / "cartpole/ne_only_ablation_runs"
+ACH_DIR = BASE_DIR / "cartpole/ach_only_ablation_runs"
 
-OUT_NE_PNG = BASE_DIR / "cartpole_successful/only_ne_avg_reward_rate.png"
-OUT_ACH_PNG = BASE_DIR / "cartpole_successful/only_ach_avg_reward_rate.png"
-OUT_CSV = BASE_DIR / "cartpole_successful/ablation_comparison_stats.csv"
+OUT_NE_PNG = BASE_DIR / "cartpole/only_ne_avg_reward_rate.png"
+OUT_ACH_PNG = BASE_DIR / "cartpole/only_ach_avg_reward_rate.png"
+OUT_CSV = BASE_DIR / "cartpole/ablation_comparison_stats.csv"
 
 WINDOW = 100
 SEEDS = list(range(1, 21))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Aggregate fixed_sb runs into paper-ready numbers.
+Aggregate results/bandit/runs into paper-ready numbers.
 
 Reports totals in the paper's +1/-1 convention (2 * optimal_count - n_episodes),
 population SD (ddof=0, matching the paper), paired t-test and Wilcoxon p-values,
@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "bandit"))
 RUNS = os.path.join(HERE, "runs")
 SWITCH_EP = 10000
 CONDITIONS = ["classic", "ace", "only_ne", "only_ach"]

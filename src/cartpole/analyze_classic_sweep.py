@@ -14,10 +14,10 @@ import concurrent.futures
 
 import numpy as np
 
-ROOT       = os.path.dirname(os.path.abspath(__file__))
+ROOT       = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole"))
 SWEEP_DIR  = os.path.join(ROOT, "classic_hyperparam_search")
 TOP5_DIR   = os.path.join(ROOT, "classic_top5_runs")
-SCRIPT     = os.path.join(ROOT, "classic.py")
+SCRIPT     = os.path.join(os.path.dirname(os.path.abspath(__file__)), "classic.py")
 SWITCH_EP  = 5000
 EPISODES   = 10000
 SEEDS      = [1, 2, 3, 4, 5]

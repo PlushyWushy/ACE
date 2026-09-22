@@ -7,11 +7,11 @@ aggregate numbers reproduce exactly; the only addition is per-episode logging.
 import argparse, concurrent.futures as cf, os, sys
 import numpy as np, torch
 
-sys.path.insert(0, "/Users/a../Desktop/Icarus/fixed_sb")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bandit"))
 import ace_variants as AV
 from ace_sb import LocalCritic, logistic_drive, set_global_seed
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "traj")
+OUT = os.path.join(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "bandit")), "traj")
 
 
 def run(a):

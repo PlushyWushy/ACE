@@ -7,7 +7,8 @@ Switch CartPole with decoupled uncertainty following Yu & Dayan's conjecture:
 Critic uses a local TD-LTP style update with loss as a multiplicative factor.
 Actor LR decays each step and is boosted by ACh (not set equal to ACh).
 """
-#TODO: Implement serotonin as mood, deconstruct training process with visual
+
+#TODO: Run with low ACh center with switch; run with high ACh center without switch.
 import argparse
 import math
 import numpy as np
@@ -36,7 +37,7 @@ GAMMA = 0.99
 
 # --- NEUROMODULATION PARAMETERS ---
 BASE_LR = 0.000055 
-BASE_NOISE = 0.344308
+BASE_NOISE = 1
 
 # NE logistic mapping params (for unexpected uncertainty / novelty)
 NE_MAX = 3
@@ -44,12 +45,12 @@ NE_K = 0.2
 NE_CENTER = 15
 
 # ACh logistic mapping params (for expected uncertainty / variance)
-ACH_MAX = 0.004061 
-ACH_K = 4 
-ACH_CENTER = 8
+ACH_MAX = 1
+ACH_K = 10
+ACH_CENTER = 5
 
 # Surprise EMA
-EXP_SURPRISE_DECAY = 0.5  
+EXP_SURPRISE_DECAY = 0.01  
 UNEXP_SURPRISE_DECAY = 0.8 
 
 # If =1.0 -> divide by sigma (z-ish). If =0.0 -> ignore variance term.
@@ -79,13 +80,15 @@ TD_NOVELTY_MARGIN = 0.0
 CRITIC_BASE_LR = 0.001
 
 VAR_DECAY = 0
-ACTOR_LR_DECAY = 1e-3
-ACTOR_LR_BOOST = 0.001
+ACTOR_LR_DECAY = 0.1  
+ACTOR_LR_BOOST = 0.1
 ACTOR_LR_MIN = 1e-4
-ACTOR_LR_MAX = 1e-4
+ACTOR_LR_MAX = 0.1
 
 # Editable global seed (set to None for non-deterministic runs)
 SEED = 1234
+
+RESULTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole"))
 
 
 def set_global_seed(seed: int | None):
@@ -268,9 +271,6 @@ def train(args):
 
     # EMA of expected uncertainty (drives ACh)
     avg_expected = 0.0
-    exp_fast = 0.0
-    exp_slow = 0.0
-    exp_trace_inited = False
 
     reward_history = []
     unexpected_history = []
@@ -310,11 +310,11 @@ def train(args):
         # DECOUPLED NEUROMODULATION
         # =====================================================================
         # NE driven by unexpected uncertainty (novelty)
-        current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER, avg_unexpected, args.base_noise)
+        current_ne = logistic_drive(args.ne_max, args.ne_k, args.ne_center, avg_unexpected, args.base_noise)
         current_ne = min(current_ne, 5.0)
 
         # ACh uses its own logistic (expected uncertainty -> modulatory signal).
-        current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
+        current_ach = logistic_drive(args.ach_max, args.ach_k, args.ach_center, avg_expected, args.base_lr)
 
         td_sum = 0.0
         td_count = 0
@@ -382,20 +382,12 @@ def train(args):
             actor.update(td_error_val, act_spikes, current_lr=actor_lr)
 
             # =====================================================================
-            # EXPECTED UNCERTAINTY: Use critic's variance estimate directly
+            # EXPECTED UNCERTAINTY: Direct EMA of critic's variance estimate
             # =====================================================================
             current_sigma = torch.sqrt(var_curr.detach()).item()
             current_sigma = max(current_sigma, SURPRISE_EPS)
-            # Expected uncertainty: fast-slow novelty on critic's variance
-            if not exp_trace_inited:
-                exp_fast = current_sigma
-                exp_slow = current_sigma
-                exp_trace_inited = True
-            else:
-                exp_fast = (1.0 - EXP_FAST_ALPHA) * exp_fast + EXP_FAST_ALPHA * current_sigma
-                exp_slow = (1.0 - EXP_SLOW_ALPHA) * exp_slow + EXP_SLOW_ALPHA * current_sigma
-            exp_novelty = max(0.0, exp_fast) #- exp_slow)
-            avg_expected = EXP_SURPRISE_DECAY * avg_expected + exp_novelty #(1.0 - EXP_SURPRISE_DECAY) * exp_novelty
+            
+            avg_expected = (1.0 - EXP_SURPRISE_DECAY) * avg_expected + EXP_SURPRISE_DECAY * current_sigma
 
             # =====================================================================
             # UNEXPECTED UNCERTAINTY: Fast-slow TD novelty
@@ -415,9 +407,9 @@ def train(args):
             avg_unexpected = UNEXP_SURPRISE_DECAY * avg_unexpected + td_novelty #(1.0 - UNEXP_SURPRISE_DECAY) * td_novelty
 
             # Update dynamics for next step
-            current_ne = logistic_drive(args.ne_max, NE_K, NE_CENTER, avg_unexpected, args.base_noise)
+            current_ne = logistic_drive(args.ne_max, args.ne_k, args.ne_center, avg_unexpected, args.base_noise)
             current_ne = min(current_ne, 5.0)
-            current_ach = logistic_drive(args.ach_max, ACH_K, ACH_CENTER, avg_expected, args.base_lr)
+            current_ach = logistic_drive(args.ach_max, args.ach_k, args.ach_center, avg_expected, args.base_lr)
 
             obs_t = next_obs_t
             total_reward += float(reward)
@@ -486,18 +478,18 @@ def train(args):
     fig.tight_layout()
     plt.title("Switch CartPole - Decoupled Uncertainty (TD-LTP Critic, Actor LR Decay)")
 
-    if args.out_dir:
+    if getattr(args, 'out_dir', None):
         out_dir = args.out_dir
     else:
-        out_dir = f"icarussecondpaper/runs/{args.seed}_classic" if args.seed is not None else "cartpole/runs/noseed_critic_ach_decoupled_tdlp_actor_lr_decay"
+        out_dir = os.path.join(RESULTS, "runs", f"{args.seed}_flagship" if args.seed is not None else "noseed_flagship")
     os.makedirs(out_dir, exist_ok=True)
 
-    stem = f"config_{args.config_id}_seed_{args.seed}" if args.config_id is not None else f"{args.seed}_classic"
+    file_prefix = f"config_{args.config_id}_seed_{args.seed}" if getattr(args, 'config_id', None) is not None else f"{args.seed}_flagship"
 
-    png_path = os.path.join(out_dir, f"{stem}.png")
+    png_path = os.path.join(out_dir, f"{file_prefix}.png")
     fig.savefig(png_path, dpi=150, bbox_inches="tight")
 
-    csv_path = os.path.join(out_dir, f"{stem}.csv")
+    csv_path = os.path.join(out_dir, f"{file_prefix}.csv")
     with open(csv_path, "w") as fh:
         fh.write("episode,reward,unexpected_uncertainty,expected_uncertainty,mean_variance,mean_td_error_sq,mean_delta_var,mean_actor_lr,mean_abs_td\n")
         for i, (r, u, e, v, td2, dv, alr, td) in enumerate(zip(reward_history, unexpected_history, expected_history, variance_history, td2_history, delta_var_history, actor_lr_history, td_history)):
@@ -511,10 +503,16 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=10000)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed (overrides top-level SEED)")
+    parser.add_argument("--config_id", type=int, default=None, help="Configuration ID for hyperparameter sweeps")
+    parser.add_argument("--out_dir", type=str, default=None, help="Output directory for results")
     parser.add_argument("--base_lr", type=float, default=BASE_LR)
     parser.add_argument("--base_noise", type=float, default=BASE_NOISE)
     parser.add_argument("--ne_max", type=float, default=NE_MAX)
     parser.add_argument("--ach_max", type=float, default=ACH_MAX)
+    parser.add_argument("--ne_k", type=float, default=NE_K)
+    parser.add_argument("--ne_center", type=float, default=NE_CENTER)
+    parser.add_argument("--ach_k", type=float, default=ACH_K)
+    parser.add_argument("--ach_center", type=float, default=ACH_CENTER)
     parser.add_argument("--critic_base_lr", type=float, default=CRITIC_BASE_LR)
     parser.add_argument("--actor_lr_decay", type=float, default=ACTOR_LR_DECAY)
     parser.add_argument("--actor_lr_boost", type=float, default=ACTOR_LR_BOOST)
@@ -522,8 +520,9 @@ if __name__ == "__main__":
     parser.add_argument("--actor_lr_max", type=float, default=ACTOR_LR_MAX)
     parser.add_argument("--td_fast_alpha", type=float, default=TD_FAST_ALPHA)
     parser.add_argument("--td_slow_alpha", type=float, default=TD_SLOW_ALPHA)
-    parser.add_argument("--out_dir", type=str, default=None, help="Override output directory")
-    parser.add_argument("--config_id", type=int, default=None, help="Config ID for sweep runs")
     args = parser.parse_args()
+
+    if args.actor_lr_min < args.base_lr:
+        args.base_lr = args.actor_lr_min
 
     train(args)

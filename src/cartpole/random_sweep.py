@@ -22,7 +22,8 @@ HYPERPARAMETERS = {
 NUM_RANDOM_CONFIGS = 100
 SEEDS = [1, 2, 3]
 EPISODES = 10000 # Using a smaller number of episodes for the random search. Will adjust if necessary.
-SCRIPT_PATH = "/Users/a../Desktop/Icarus/cartpole_successful/flagship.py"
+SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flagship.py")
+RESULTS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "cartpole"))
 
 def generate_random_configs(grid, num_configs):
     keys, values = zip(*grid.items())
@@ -31,7 +32,7 @@ def generate_random_configs(grid, num_configs):
     return all_possible_configs[:num_configs]
 
 def run_experiment(config, seed, config_id):
-    out_dir = "cartpole_successful/hyperparam_search"
+    out_dir = os.path.join(RESULTS, "hyperparam_search")
     cmd = [
         "python3", SCRIPT_PATH,
         "--seed", str(seed),
@@ -45,7 +46,7 @@ def run_experiment(config, seed, config_id):
     try:
         # We need to capture the reward to evaluate the config.
         # Assuming the script prints the final average reward or we parse it from saved CSVs.
-        # Looking at flagship.py, it saves to cartpole_successful/runs_saved/
+        # flagship.py writes each run's CSV into out_dir (results/cartpole/hyperparam_search/)
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         # return the config id and seed so we can look up the result
         return config_id, seed, True, ""
@@ -79,7 +80,7 @@ def main():
     print("Sweep complete. Please aggregate results to find the best configs.")
     
     # Save the configs used so we know which ID maps to which parameters
-    with open('random_search_configs.csv', 'w', newline='') as f:
+    with open(os.path.join(RESULTS, 'random_search_configs.csv'), 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['config_id'] + list(HYPERPARAMETERS.keys()))
         writer.writeheader()
         for i, config in enumerate(configs):

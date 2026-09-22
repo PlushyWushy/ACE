@@ -25,7 +25,7 @@ import numpy as np
 
 import ace_sb
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "results", "bandit"))
 RUNS = os.path.join(HERE, "runs")
 
 # classic baseline: both modulators off.  BASE_LR 1e-2 is the value the paper

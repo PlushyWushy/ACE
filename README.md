@@ -1,20 +1,12 @@
-# Icarus
+# ACE
 
 Research project investigating neuromodulated learning in spiking neural networks for reinforcement learning tasks.
-## Updates:
-There have been multiple upgrades made recently, mainly to make the tests more biologically plausible. For both switch-bandit and switch-cartpole, the ACh and NE have been decoupled from the original surprise signal and now rely on variance and TD-error as expected and unexpected surprise signals, respectively. Furthermore, the critic is now trained using TD-stdp for both tasks. The new scripts to run are cartpole_successful/flagship.py and sb/icarus_upgraded.py.
 
-
-## Experiments
-
-### CartPole Switch Task
-### Switch Bandit variations 
-### Acrobot Task
+Abstract: 
+The current standard biologically plausible training rule for spiking network reinforcement learning (RL), reward-modulated spike-timing-dependent plasticity (RSTDP), often has inferior performance compared to biologically implausible methods. In addition, RSTDP is slow, purely local, and fragile in non-stationary environments. This paper presents ACE (the first three letters of acetylcholine), a novel, biologically inspired learning rule that extends RSTDP's three factors to five. ACE introduces modulating factors based on neuromodulators acetylcholine (ACh) and norepinephrine (NE), which modulate learning rate and random noise, respectively. Actor-critic systems trained using ACE achieve higher reward over the fixed window following a task switch than a hyperparameter-tuned classic RSTDP baseline. On the Switch Bandit tasks, ACE recovers better than the baseline; on Switch CartPole, the classic baseline fails to re-adapt within the training horizon while ACE recovers control. ACE does not match non-local surrogate-gradient training but still outperforms classic RSTDP in the tested benchmarks. ACE demonstrates that biologically-inspired neuromodulation increases the adaptability of SNNs in the tested non-stationary environments.
 
 
 
-## Results
 
-Results are saved to `cartpole/runs/SEED_EXPERIMENT/`:
-- `*.png` - Training plots
-- `*.csv` - Episode rewards and metrics
+
+
